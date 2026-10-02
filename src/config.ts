@@ -14,6 +14,9 @@ const esquema = z.object({
   S3_BUCKET: z.string().min(1),
   S3_REGION: z.string().default("us-east-1"),
   S3_ENDPOINT: z.string().optional().transform((v) => v || undefined),
+  // Host que ve el navegador al reproducir (p. ej. http://localhost:9000 con MinIO
+  // en Docker, donde S3_ENDPOINT es http://minio:9000). Vacío = S3_ENDPOINT.
+  S3_PUBLIC_ENDPOINT: z.string().optional().transform((v) => v || undefined),
   S3_FORCE_PATH_STYLE: z
     .string()
     .optional()

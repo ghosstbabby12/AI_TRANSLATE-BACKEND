@@ -1,5 +1,6 @@
 import express from "express";
 import { config } from "../config.js";
+import { IDIOMAS } from "../idiomas.js";
 import { manejadorErrores } from "./middleware/errores.js";
 import { videosRouter } from "./routes/videos.routes.js";
 
@@ -24,6 +25,9 @@ export function crearApp() {
 
   app.get("/salud", (_req, res) => {
     res.json({ ok: true });
+  });
+  app.get("/idiomas", (_req, res) => {
+    res.json(Object.entries(IDIOMAS).map(([codigo, nombre]) => ({ codigo, nombre })));
   });
   app.use("/videos", videosRouter);
 

@@ -14,6 +14,11 @@ const s3 = new S3Client({
   forcePathStyle: config.S3_FORCE_PATH_STYLE,
 });
 
+// Cliente solo para firmar URLs que abrirá el navegador (la firma incluye el host).
+const s3Publico = config.S3_PUBLIC_ENDPOINT
+  ? new S3Client({ region: config.S3_REGION, endpoint: config.S3_PUBLIC_ENDPOINT, forcePathStyle: config.S3_FORCE_PATH_STYLE })
+  : s3;
+
 export const claves = {
   videoOriginal: (videoId: string, ext: string) => `videos/${videoId}/original${ext}`,
   audioSegmento: (videoId: string, indice: number) =>
@@ -40,7 +45,7 @@ export async function descargarBuffer(key: string): Promise<Buffer> {
 
 /** URL temporal para que el reproductor del frontend lea el video directo de S3. */
 export async function urlFirmada(key: string, segundos = 3600): Promise<string> {
-  return getSignedUrl(s3, new GetObjectCommand({ Bucket: config.S3_BUCKET, Key: key }), {
+  return getSignedUrl(s3Publico, new GetObjectCommand({ Bucket: config.S3_BUCKET, Key: key }), {
     expiresIn: segundos,
   });
 }
