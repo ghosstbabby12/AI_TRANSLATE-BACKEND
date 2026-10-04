@@ -14,18 +14,24 @@ const esquema = z.object({
   S3_BUCKET: z.string().min(1),
   S3_REGION: z.string().default("us-east-1"),
   S3_ENDPOINT: z.string().optional().transform((v) => v || undefined),
-  // Host que ve el navegador al reproducir (p. ej. http://localhost:9000 con MinIO
-  // en Docker, donde S3_ENDPOINT es http://minio:9000). Vacío = S3_ENDPOINT.
+  // Host que ve el navegador al reproducir (p. ej. http://localhost:8333 con SeaweedFS
+  // en Docker, donde S3_ENDPOINT es http://s3:8333). Vacío = S3_ENDPOINT.
   S3_PUBLIC_ENDPOINT: z.string().optional().transform((v) => v || undefined),
   S3_FORCE_PATH_STYLE: z
     .string()
     .optional()
     .transform((v) => v === "true"),
 
-  OPENAI_API_KEY: z.string().min(1),
+  // "simulada" reemplaza STT y LLM por texto de prueba: sirve para probar todo
+  // el sistema sin claves ni costo. Las claves solo se exigen en modo "real".
+  IA_MODO: z.enum(["real", "simulada"]).default("real"),
+  // Fracción de llamadas simuladas que fallan, para ver los reintentos en acción
+  IA_SIMULADA_FALLOS: z.coerce.number().min(0).max(1).default(0.1),
+
+  OPENAI_API_KEY: z.string().optional(),
   STT_MODEL: z.string().default("whisper-1"),
 
-  ANTHROPIC_API_KEY: z.string().min(1),
+  ANTHROPIC_API_KEY: z.string().optional(),
   CLAUDE_MODEL: z.string().default("claude-opus-5-5"),
   CLAUDE_EFFORT: z.enum(["low", "medium", "high", "xhigh", "max"]).default("low"),
 
@@ -39,6 +45,11 @@ const esquema = z.object({
   FFMPEG_PATH: z.string().default("ffmpeg"),
   FFPROBE_PATH: z.string().default("ffprobe"),
   YTDLP_PATH: z.string().default("yt-dlp"),
+}).superRefine((c, ctx) => {
+  if (c.IA_MODO !== "real") return;
+  for (const clave of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"] as const) {
+    if (!c[clave]) ctx.addIssue({ code: "custom", path: [clave], message: `Obligatoria con IA_MODO=real` });
+  }
 });
 
 const resultado = esquema.safeParse(process.env);
@@ -48,3 +59,7 @@ if (!resultado.success) {
 }
 
 export const config = resultado.data;
+
+if (config.IA_MODO === "simulada") {
+  console.warn("IA_MODO=simulada: la transcripción y la traducción son texto de prueba, no IA real.");
+}

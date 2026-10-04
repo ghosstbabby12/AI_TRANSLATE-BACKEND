@@ -2,12 +2,11 @@ import Anthropic from "@anthropic-ai/sdk";
 import { config } from "../config.js";
 import { nombreIdioma } from "../idiomas.js";
 import { ErrorIA } from "./errores.js";
+import { traducirSimulado } from "./simulada.js";
 
-const anthropic = new Anthropic({
-  apiKey: config.ANTHROPIC_API_KEY,
-  timeout: 60_000,
-  maxRetries: 2,
-});
+let cliente: Anthropic | undefined;
+const anthropic = () =>
+  (cliente ??= new Anthropic({ apiKey: config.ANTHROPIC_API_KEY, timeout: 60_000, maxRetries: 2 }));
 
 // Fijo para todos los videos (el idioma va en el mensaje de usuario).
 const SISTEMA = `Eres un traductor profesional de subtítulos.
@@ -58,13 +57,15 @@ function armarMensaje({ texto, idiomaDestino, anterior }: EntradaTraduccion): st
 const esHaiku = config.CLAUDE_MODEL.startsWith("claude-haiku");
 
 export async function traducir(entrada: EntradaTraduccion): Promise<string> {
+  if (config.IA_MODO === "simulada") return traducirSimulado(entrada.texto, entrada.idiomaDestino);
+
   if (entrada.texto.length > config.MAX_CHARS_SEGMENTO) {
     console.warn(
       `Segmento de ${entrada.texto.length} caracteres recortado a ${config.MAX_CHARS_SEGMENTO} (MAX_CHARS_SEGMENTO)`,
     );
   }
 
-  const respuesta = await anthropic.beta.messages.create({
+  const respuesta = await anthropic().beta.messages.create({
     model: config.CLAUDE_MODEL,
     // Un segmento de 20-30 s son ~100 palabras; el tope acota costo y latencia
     // dejando margen para el razonamiento interno del modelo.

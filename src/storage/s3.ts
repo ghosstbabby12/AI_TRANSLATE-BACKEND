@@ -7,7 +7,7 @@ import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import { config } from "../config.js";
 
 // Las credenciales las toma el SDK de AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY
-// (o del rol IAM si corre en AWS). S3_ENDPOINT permite usar R2 o MinIO.
+// (o del rol IAM si corre en AWS). S3_ENDPOINT permite usar R2 o SeaweedFS.
 const s3 = new S3Client({
   region: config.S3_REGION,
   endpoint: config.S3_ENDPOINT,

@@ -1,11 +1,11 @@
 import OpenAI, { toFile } from "openai";
 import { config } from "../config.js";
+import { transcribirSimulado } from "./simulada.js";
 
-const openai = new OpenAI({
-  apiKey: config.OPENAI_API_KEY,
-  timeout: 60_000,
-  maxRetries: 2,
-});
+// Se crea al primer uso: en modo simulado no hay clave y el constructor fallaría.
+let cliente: OpenAI | undefined;
+const openai = () =>
+  (cliente ??= new OpenAI({ apiKey: config.OPENAI_API_KEY, timeout: 60_000, maxRetries: 2 }));
 
 export interface ResultadoTranscripcion {
   texto: string;
@@ -19,11 +19,13 @@ export interface ResultadoTranscripcion {
  * cambiar la ortografía de nombres propios entre segmentos.
  */
 export async function transcribir(audio: Buffer, pista?: string | null): Promise<ResultadoTranscripcion> {
+  if (config.IA_MODO === "simulada") return transcribirSimulado(audio);
+
   const file = await toFile(audio, "segmento.mp3", { type: "audio/mpeg" });
   const prompt = pista ? pista.slice(-200) : undefined;
 
   if (config.STT_MODEL === "whisper-1") {
-    const r = await openai.audio.transcriptions.create({
+    const r = await openai().audio.transcriptions.create({
       file,
       model: "whisper-1",
       response_format: "verbose_json",
@@ -33,7 +35,7 @@ export async function transcribir(audio: Buffer, pista?: string | null): Promise
   }
 
   // gpt-4o-transcribe / gpt-4o-mini-transcribe solo devuelven texto
-  const r = await openai.audio.transcriptions.create({
+  const r = await openai().audio.transcriptions.create({
     file,
     model: config.STT_MODEL,
     response_format: "json",
