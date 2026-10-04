@@ -177,10 +177,23 @@ videosRouter.get("/:id/subtitulos", async (req, res) => {
   res.send(cuerpo);
 });
 
-/** POST /videos/:id/reintentar — vuelve a encolar los segmentos que quedaron en error. */
+/**
+ * POST /videos/:id/reintentar — vuelve a encolar los segmentos que quedaron en
+ * error o, si el video falló antes de dividirse (p. ej. la descarga), el video entero.
+ */
 videosRouter.post("/:id/reintentar", async (req, res) => {
   const video = await videoDelUsuario(req, res);
   if (!video) return;
+  if (video.total_segmentos === null) {
+    if (video.estado !== "error") {
+      res.status(409).json({ error: "El video todavía se está preparando" });
+      return;
+    }
+    await actualizarEstadoVideo(video.id, "pendiente");
+    await encolarVideo(video.id);
+    res.json({ reencolados: 0, video: true });
+    return;
+  }
   const ids = await reiniciarSegmentosConError(video.id);
   if (ids.length > 0) {
     await actualizarEstadoVideo(video.id, "procesando");

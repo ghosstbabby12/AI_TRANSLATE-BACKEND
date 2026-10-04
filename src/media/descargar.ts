@@ -10,6 +10,8 @@ import { ejecutar } from "./ffmpeg.js";
 export async function descargarDesdeUrl(url: string, dirSalida: string): Promise<string> {
   await ejecutar(config.YTDLP_PATH, [
     "--no-playlist",
+    // YouTube exige ejecutar JavaScript; se usa el Node que ya trae la imagen
+    "--js-runtimes", "node",
     "--no-progress",
     "--max-filesize", `${config.MAX_UPLOAD_MB}M`,
     "-f", "b[ext=mp4]/bv*+ba/b",

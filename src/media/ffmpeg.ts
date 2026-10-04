@@ -19,9 +19,12 @@ export function ejecutar(bin: string, args: string[]): Promise<string> {
     proc.stdout.on("data", (d) => (stdout += d));
     proc.stderr.on("data", (d) => (stderr += d));
     proc.on("error", reject);
-    proc.on("close", (code) => {
+    proc.on("close", (code, senal) => {
       if (code === 0) resolve(stdout);
-      else reject(new Error(`${path.basename(bin)} terminó con código ${code}: ${stderr.slice(-800)}`));
+      else {
+        const motivo = code === null ? `por la señal ${senal}` : `con código ${code}`;
+        reject(new Error(`${path.basename(bin)} terminó ${motivo}: ${stderr.trim().slice(-800)}`));
+      }
     });
   });
 }

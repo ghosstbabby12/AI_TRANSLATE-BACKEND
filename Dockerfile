@@ -8,10 +8,13 @@ COPY src ./src
 RUN npm run build
 
 FROM node:22-slim
-# ffmpeg/ffprobe para el audio, yt-dlp (binario autónomo) para los links
+# La pone Docker: arm64 en Mac con chip Apple, amd64 en la mayoría de nubes
+ARG TARGETARCH
+# ffmpeg/ffprobe para el audio, yt-dlp (binario autónomo de la arquitectura correcta) para los links
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ffmpeg ca-certificates curl \
- && curl -fsSL -o /usr/local/bin/yt-dlp https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux \
+ && case "$TARGETARCH" in arm64) YTDLP=yt-dlp_linux_aarch64 ;; *) YTDLP=yt-dlp_linux ;; esac \
+ && curl -fsSL -o /usr/local/bin/yt-dlp "https://github.com/yt-dlp/yt-dlp/releases/latest/download/$YTDLP" \
  && chmod +x /usr/local/bin/yt-dlp \
  && apt-get purge -y curl && rm -rf /var/lib/apt/lists/*
 

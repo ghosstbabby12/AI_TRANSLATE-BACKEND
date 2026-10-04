@@ -17,11 +17,17 @@ export const colaVideos = new Queue<JobProcesarVideo>(COLA_VIDEOS, { connection:
 export const colaSegmentos = new Queue<JobReintentarSegmento>(COLA_SEGMENTOS, { connection: conexion });
 
 export async function encolarVideo(videoId: string): Promise<void> {
+  const jobId = `video-${videoId}`;
+  // BullMQ ignora un add() con el id de un job que aún guarda (p. ej. uno
+  // fallido), así que para reintentar hay que quitar el anterior.
+  const previo = await colaVideos.getJob(jobId);
+  if (previo && (await previo.isFailed())) await previo.remove();
+
   await colaVideos.add(
     "procesar-video",
     { videoId },
     {
-      jobId: `video-${videoId}`,
+      jobId,
       // Reintenta fallos de infraestructura (descarga, ffmpeg, S3). Los fallos
       // de IA se manejan por segmento y no hacen fallar este job.
       attempts: 3,
