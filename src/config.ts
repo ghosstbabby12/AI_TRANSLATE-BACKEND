@@ -43,6 +43,11 @@ const esquema = z.object({
   MAX_INTENTOS_SEGMENTO: z.coerce.number().min(1).default(4),
   MAX_CHARS_SEGMENTO: z.coerce.number().default(2000),
   MAX_CHARS_CONTEXTO: z.coerce.number().default(600),
+  // true = la API también consume las colas (plan gratuito de Render, sin workers)
+  WORKER_EN_API: z
+    .string()
+    .optional()
+    .transform((v) => v === "true"),
   WORKER_CONCURRENCIA_VIDEOS: z.coerce.number().default(2),
   WORKER_CONCURRENCIA_REINTENTOS: z.coerce.number().default(4),
 
