@@ -1,4 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
+import { verificarToken } from "../../auth/tokens.js";
 
 declare global {
   namespace Express {
@@ -8,17 +9,14 @@ declare global {
   }
 }
 
-/**
- * Identificación mínima por cabecera `X-Usuario-Id`, suficiente para separar
- * el historial de cada usuario mientras no haya login.
- * TODO: reemplazar por verificación de un JWT (Auth0, Clerk, Cognito...).
- */
-export function requiereUsuario(req: Request, res: Response, next: NextFunction) {
-  const id = req.header("x-usuario-id");
-  if (!id || !/^[\w-]{1,64}$/.test(id)) {
-    res.status(401).json({ error: "Falta la cabecera X-Usuario-Id" });
+/** Exige `Authorization: Bearer <token>` válido (lo emite /auth/login). */
+export async function requiereUsuario(req: Request, res: Response, next: NextFunction) {
+  const [tipo, token] = (req.header("authorization") ?? "").split(" ");
+  const usuarioId = tipo === "Bearer" && token ? await verificarToken(token) : null;
+  if (!usuarioId) {
+    res.status(401).json({ error: "Inicia sesión para continuar" });
     return;
   }
-  req.usuarioId = id;
+  req.usuarioId = usuarioId;
   next();
 }

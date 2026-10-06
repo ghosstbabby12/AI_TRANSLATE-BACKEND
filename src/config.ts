@@ -8,6 +8,10 @@ const esquema = z.object({
   CORS_ORIGIN: z.string().default("*"),
   MAX_UPLOAD_MB: z.coerce.number().default(500),
 
+  // Firma los tokens de sesión. Debe ser larga y aleatoria, y distinta por entorno.
+  JWT_SECRET: z.string().min(32, "Debe tener al menos 32 caracteres"),
+  JWT_EXPIRA: z.string().default("7d"),
+
   DATABASE_URL: z.string().min(1),
   REDIS_URL: z.string().min(1),
 

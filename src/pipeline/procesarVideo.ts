@@ -51,6 +51,16 @@ export async function procesarVideo(videoId: string): Promise<void> {
   await recalcularEstadoVideo(videoId);
 }
 
+// El navegador decide si puede reproducir el video según su Content-Type.
+const TIPOS_VIDEO: Record<string, string> = {
+  ".mp4": "video/mp4",
+  ".m4v": "video/mp4",
+  ".webm": "video/webm",
+  ".mov": "video/quicktime",
+  ".mkv": "video/x-matroska",
+  ".ogv": "video/ogg",
+};
+
 async function prepararSegmentos(video: Video): Promise<void> {
   const dir = await mkdtemp(path.join(tmpdir(), `video-${video.id}-`));
   try {
@@ -60,8 +70,9 @@ async function prepararSegmentos(video: Video): Promise<void> {
     if (video.origen_tipo === "url") {
       rutaVideo = await descargarDesdeUrl(video.origen_url!, dir);
       // Se guarda en S3 para que el frontend lo pueda reproducir
-      storageKey = claves.videoOriginal(video.id, path.extname(rutaVideo));
-      await subirArchivo(storageKey, rutaVideo, "video/mp4");
+      const ext = path.extname(rutaVideo).toLowerCase();
+      storageKey = claves.videoOriginal(video.id, ext);
+      await subirArchivo(storageKey, rutaVideo, TIPOS_VIDEO[ext] ?? "application/octet-stream");
     } else {
       rutaVideo = path.join(dir, `original${path.extname(video.storage_key!)}`);
       await descargarArchivo(video.storage_key!, rutaVideo);
