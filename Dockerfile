@@ -27,4 +27,6 @@ COPY migrations ./migrations
 
 USER node
 EXPOSE 3000
-CMD ["node", "dist/server.js"]
+# Por defecto: aplica migraciones y arranca la API. El worker (docker compose)
+# sobrescribe el comando con `node dist/worker.js`.
+CMD ["sh", "-c", "node dist/db/migrate.js && node dist/server.js"]
