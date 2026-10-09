@@ -1,0 +1,73 @@
+# Blueprint de Render — plan gratuito, "todo en uno".
+# Define toda la infraestructura; el frontend se construye desde su propio repo
+# (AI_Translate-frontend) gracias al campo `repo`.
+#
+# El plan gratuito no incluye background workers, así que la API también
+# procesa las colas (WORKER_EN_API=true). Limitaciones del plan gratuito:
+#   - la API se duerme tras 15 min sin tráfico (~1 min en despertar);
+#   - Key Value (Redis) pierde la cola al reiniciarse: al arrancar se
+#     reencolan los videos sin terminar (ver recuperarTrabajos en workers.ts);
+#   - la base de datos gratuita vence a los 30 días.
+# Para pasar a un worker separado: añade un servicio `type: worker` con
+# dockerCommand `node dist/worker.js`, plan de pago, y pon WORKER_EN_API=false.
+#
+# Los videos se guardan en Cloudflare R2 (Render no tiene almacenamiento de objetos).
+# Los valores con sync: false se piden en el panel al crear el Blueprint.
+services:
+  - type: web
+    name: traductor-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # Sin dockerCommand: se usa el CMD del Dockerfile (migraciones + API). Render
+    # no pasa dockerCommand por una shell, así que "sh -c '...'" no funciona ahí.
+    healthCheckPath: /salud
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase: { name: traductor-db, property: connectionString }
+      - key: REDIS_URL
+        fromService: { type: keyvalue, name: traductor-redis, property: connectionString }
+      - { key: JWT_SECRET, generateValue: true }
+      - { key: WORKER_EN_API, value: "true" }
+      # Instancia gratuita: 512 MB de RAM, un video a la vez
+      - { key: WORKER_CONCURRENCIA_VIDEOS, value: "1" }
+      - { key: WORKER_CONCURRENCIA_REINTENTOS, value: "2" }
+      - { key: MAX_UPLOAD_MB, value: "200" }
+      # simulada = sin claves ni costo. Para IA real: "real" + las dos claves.
+      - { key: IA_MODO, value: simulada }
+      - { key: OPENAI_API_KEY, sync: false }
+      - { key: ANTHROPIC_API_KEY, sync: false }
+      # Cloudflare R2
+      - { key: S3_BUCKET, value: traductor-videos }
+      - { key: S3_REGION, value: auto }
+      - { key: S3_FORCE_PATH_STYLE, value: "true" }
+      - { key: S3_ENDPOINT, sync: false } # https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+      - { key: AWS_ACCESS_KEY_ID, sync: false }
+      - { key: AWS_SECRET_ACCESS_KEY, sync: false }
+      # URL del frontend (p. ej. https://traductor-frontend.onrender.com)
+      - { key: CORS_ORIGIN, sync: false }
+
+  - type: web
+    name: traductor-frontend
+    runtime: static
+    # El frontend está en otro repositorio
+    repo: https://github.com/ghosstbabby12/AI_Translate-frontend
+    branch: main
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    envVars:
+      # URL de la API (p. ej. https://traductor-api.onrender.com)
+      - { key: VITE_API_URL, sync: false }
+    routes:
+      - { type: rewrite, source: /*, destination: /index.html }
+
+  - type: keyvalue
+    name: traductor-redis
+    plan: free
+    ipAllowList: [] # solo accesible desde servicios de Render
+    maxmemoryPolicy: noeviction # BullMQ no debe perder jobs por falta de memoria
+
+databases:
+  - name: traductor-db
+    plan: free
