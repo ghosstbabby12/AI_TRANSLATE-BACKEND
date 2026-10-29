@@ -32,8 +32,19 @@ const esquema = z.object({
   // Fracción de llamadas simuladas que fallan, para ver los reintentos en acción
   IA_SIMULADA_FALLOS: z.coerce.number().min(0).max(1).default(0.1),
 
+  // Proveedor de cada paso. Groq tiene plan gratuito (con límites) y ofrece
+  // Whisper y modelos abiertos con la misma API que OpenAI.
+  STT_PROVEEDOR: z.enum(["openai", "groq"]).default("openai"),
+  TRADUCCION_PROVEEDOR: z.enum(["claude", "groq"]).default("claude"),
+
   OPENAI_API_KEY: z.string().optional(),
   STT_MODEL: z.string().default("whisper-1"),
+
+  GROQ_API_KEY: z.string().optional(),
+  GROQ_BASE_URL: z.string().default("https://api.groq.com/openai/v1"),
+  GROQ_STT_MODEL: z.string().default("whisper-large-v3-turbo"),
+  // Groq retira modelos a menudo: ver https://console.groq.com/docs/models
+  GROQ_MODELO_TRADUCCION: z.string().default("openai/gpt-oss-120b"),
 
   ANTHROPIC_API_KEY: z.string().optional(),
   CLAUDE_MODEL: z.string().default("claude-opus-5-5"),
@@ -56,8 +67,19 @@ const esquema = z.object({
   YTDLP_PATH: z.string().default("yt-dlp"),
 }).superRefine((c, ctx) => {
   if (c.IA_MODO !== "real") return;
-  for (const clave of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"] as const) {
-    if (!c[clave]) ctx.addIssue({ code: "custom", path: [clave], message: `Obligatoria con IA_MODO=real` });
+  // Solo se exigen las claves de los proveedores elegidos.
+  const requeridas = new Set<"OPENAI_API_KEY" | "ANTHROPIC_API_KEY" | "GROQ_API_KEY">([
+    c.STT_PROVEEDOR === "groq" ? "GROQ_API_KEY" : "OPENAI_API_KEY",
+    c.TRADUCCION_PROVEEDOR === "groq" ? "GROQ_API_KEY" : "ANTHROPIC_API_KEY",
+  ]);
+  for (const clave of requeridas) {
+    if (!c[clave]) {
+      ctx.addIssue({
+        code: "custom",
+        path: [clave],
+        message: `Obligatoria con IA_MODO=real, STT_PROVEEDOR=${c.STT_PROVEEDOR} y TRADUCCION_PROVEEDOR=${c.TRADUCCION_PROVEEDOR}`,
+      });
+    }
   }
 });
 
@@ -71,4 +93,6 @@ export const config = resultado.data;
 
 if (config.IA_MODO === "simulada") {
   console.warn("IA_MODO=simulada: la transcripción y la traducción son texto de prueba, no IA real.");
+} else {
+  console.log(`IA real: transcripción con ${config.STT_PROVEEDOR}, traducción con ${config.TRADUCCION_PROVEEDOR}`);
 }
