@@ -34,8 +34,12 @@ services:
       - { key: WORKER_CONCURRENCIA_VIDEOS, value: "1" }
       - { key: WORKER_CONCURRENCIA_REINTENTOS, value: "2" }
       - { key: MAX_UPLOAD_MB, value: "200" }
-      # simulada = sin claves ni costo. Para IA real: "real" + las dos claves.
-      - { key: IA_MODO, value: simulada }
+      # simulada = sin claves ni costo. Para IA real: "real" + las claves de los
+      # proveedores elegidos. Groq (plan gratuito) sirve para los dos pasos.
+      - { key: IA_MODO, value: real }
+      - { key: STT_PROVEEDOR, value: groq }
+      - { key: TRADUCCION_PROVEEDOR, value: groq }
+      - { key: GROQ_API_KEY, sync: false }
       - { key: OPENAI_API_KEY, sync: false }
       - { key: ANTHROPIC_API_KEY, sync: false }
       # Cloudflare R2
