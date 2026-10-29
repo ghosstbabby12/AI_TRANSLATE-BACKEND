@@ -1,5 +1,6 @@
 import OpenAI, { toFile } from "openai";
 import { config } from "../config.js";
+import { groq } from "./groq.js";
 import { transcribirSimulado } from "./simulada.js";
 
 // Se crea al primer uso: en modo simulado no hay clave y el constructor fallaría.
@@ -9,9 +10,17 @@ const openai = () =>
 
 export interface ResultadoTranscripcion {
   texto: string;
-  /** Idioma detectado (solo lo devuelve whisper-1 con verbose_json). */
+  /** Código ISO del idioma detectado (whisper-1 y los Whisper de Groq lo devuelven). */
   idioma?: string;
 }
+
+// Whisper devuelve el nombre del idioma en inglés ("spanish"); se guarda el código.
+const CODIGOS: Record<string, string> = {
+  spanish: "es", english: "en", portuguese: "pt", french: "fr", german: "de", italian: "it",
+  japanese: "ja", korean: "ko", chinese: "zh", russian: "ru", arabic: "ar", hindi: "hi",
+  dutch: "nl", catalan: "ca", polish: "pl", turkish: "tr", indonesian: "id",
+};
+const codigoIdioma = (nombre?: string) => (nombre ? (CODIGOS[nombre.toLowerCase()] ?? nombre.toLowerCase()) : undefined);
 
 /**
  * Transcribe un trozo de audio (~20 s, < 100 KB). `pista` es el final del
@@ -24,22 +33,17 @@ export async function transcribir(audio: Buffer, pista?: string | null): Promise
   const file = await toFile(audio, "segmento.mp3", { type: "audio/mpeg" });
   const prompt = pista ? pista.slice(-200) : undefined;
 
-  if (config.STT_MODEL === "whisper-1") {
-    const r = await openai().audio.transcriptions.create({
-      file,
-      model: "whisper-1",
-      response_format: "verbose_json",
-      prompt,
-    });
-    return { texto: r.text.trim(), idioma: r.language };
+  // whisper-1 y los Whisper de Groq aceptan verbose_json, que trae el idioma.
+  const conIdioma = config.STT_PROVEEDOR === "groq" || config.STT_MODEL === "whisper-1";
+  const [api, modelo] =
+    config.STT_PROVEEDOR === "groq" ? [groq(), config.GROQ_STT_MODEL] : [openai(), config.STT_MODEL];
+
+  if (conIdioma) {
+    const r = await api.audio.transcriptions.create({ file, model: modelo, response_format: "verbose_json", prompt });
+    return { texto: r.text.trim(), idioma: codigoIdioma(r.language) };
   }
 
   // gpt-4o-transcribe / gpt-4o-mini-transcribe solo devuelven texto
-  const r = await openai().audio.transcriptions.create({
-    file,
-    model: config.STT_MODEL,
-    response_format: "json",
-    prompt,
-  });
+  const r = await api.audio.transcriptions.create({ file, model: modelo, response_format: "json", prompt });
   return { texto: r.text.trim() };
 }
