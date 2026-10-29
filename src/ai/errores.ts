@@ -31,8 +31,12 @@ export function clasificarError(err: unknown): { mensaje: string; recuperable: b
   if (err instanceof Anthropic.APIError) {
     return { mensaje: `Claude ${err.status}: ${err.message}`, recuperable: esStatusRecuperable(err.status) };
   }
+  // OpenAI y Groq comparten SDK (Groq es compatible con la API de OpenAI)
   if (err instanceof OpenAI.APIError) {
-    return { mensaje: `STT ${err.status}: ${err.message}`, recuperable: esStatusRecuperable(err.status) };
+    if (err.status === 404) {
+      return { mensaje: `Modelo no encontrado (¿retirado por el proveedor?): ${err.message}`, recuperable: false };
+    }
+    return { mensaje: `IA ${err.status}: ${err.message}`, recuperable: esStatusRecuperable(err.status) };
   }
 
   // Cualquier otra cosa (S3 caído, disco, etc.): se asume transitorio.

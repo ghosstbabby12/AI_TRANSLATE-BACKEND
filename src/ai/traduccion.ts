@@ -2,6 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { config } from "../config.js";
 import { nombreIdioma } from "../idiomas.js";
 import { ErrorIA } from "./errores.js";
+import { groq } from "./groq.js";
 import { traducirSimulado } from "./simulada.js";
 
 let cliente: Anthropic | undefined;
@@ -55,6 +56,8 @@ function armarMensaje({ texto, idiomaDestino, anterior }: EntradaTraduccion): st
 }
 
 const esHaiku = config.CLAUDE_MODEL.startsWith("claude-haiku");
+// Los gpt-oss de Groq razonan antes de responder; "low" basta para traducir.
+const esGptOss = config.GROQ_MODELO_TRADUCCION.startsWith("openai/gpt-oss");
 
 export async function traducir(entrada: EntradaTraduccion): Promise<string> {
   if (config.IA_MODO === "simulada") return traducirSimulado(entrada.texto, entrada.idiomaDestino);
@@ -65,6 +68,13 @@ export async function traducir(entrada: EntradaTraduccion): Promise<string> {
     );
   }
 
+  const texto =
+    config.TRADUCCION_PROVEEDOR === "groq" ? await traducirConGroq(entrada) : await traducirConClaude(entrada);
+  if (!texto) throw new ErrorIA("El modelo devolvió una traducción vacía", true);
+  return texto;
+}
+
+async function traducirConClaude(entrada: EntradaTraduccion): Promise<string> {
   const respuesta = await anthropic().beta.messages.create({
     model: config.CLAUDE_MODEL,
     // Un segmento de 20-30 s son ~100 palabras; el tope acota costo y latencia
@@ -93,10 +103,30 @@ export async function traducir(entrada: EntradaTraduccion): Promise<string> {
     throw new ErrorIA("La traducción se cortó por max_tokens", true);
   }
 
-  const texto = respuesta.content
+  return respuesta.content
     .flatMap((b) => (b.type === "text" ? [b.text] : []))
     .join("")
     .trim();
-  if (!texto) throw new ErrorIA("El modelo devolvió una traducción vacía", true);
-  return texto;
+}
+
+async function traducirConGroq(entrada: EntradaTraduccion): Promise<string> {
+  const respuesta = await groq().chat.completions.create({
+    model: config.GROQ_MODELO_TRADUCCION,
+    messages: [
+      { role: "system", content: SISTEMA },
+      { role: "user", content: armarMensaje(entrada) },
+    ],
+    // Baja: una traducción debe ser fiel, no creativa
+    temperature: 0.3,
+    // Incluye el razonamiento del modelo además del texto traducido
+    max_completion_tokens: 2048,
+    ...(esGptOss ? { reasoning_effort: "low" as const } : {}),
+  });
+
+  const eleccion = respuesta.choices[0];
+  if (eleccion?.finish_reason === "length") {
+    throw new ErrorIA("La traducción se cortó por el límite de tokens", true);
+  }
+  // Algunos modelos abiertos incluyen su razonamiento entre <think>…</think>
+  return (eleccion?.message.content ?? "").replace(/<think>[\s\S]*?<\/think>/g, "").trim();
 }
