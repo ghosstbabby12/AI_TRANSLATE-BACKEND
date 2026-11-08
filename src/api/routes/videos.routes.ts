@@ -7,7 +7,7 @@ import multer from "multer";
 import { z } from "zod";
 import { config } from "../../config.js";
 import { CODIGOS_IDIOMA } from "../../idiomas.js";
-import { encolarReintentoSegmento, encolarVideo } from "../../queue/colas.js";
+import { encolarExportacion, encolarReintentoSegmento, encolarVideo } from "../../queue/colas.js";
 import {
   listarSegmentos,
   listarSegmentosListos,
@@ -16,12 +16,14 @@ import {
 } from "../../repositories/segmentos.repo.js";
 import {
   actualizarEstadoVideo,
+  actualizarExportacion,
   crearVideo,
   listarVideosDeUsuario,
   obtenerVideoDeUsuario,
 } from "../../repositories/videos.repo.js";
 import { claves, subirArchivo, urlFirmada } from "../../storage/s3.js";
-import { aSrt, aVtt, generarCues } from "../../subtitulos/formatos.js";
+import { aSrt, aTxt, aVtt, generarCues } from "../../subtitulos/formatos.js";
+import type { Video } from "../../models/types.js";
 import { describirError } from "../../util/resiliencia.js";
 import { requiereUsuario } from "../middleware/usuario.js";
 
@@ -40,12 +42,18 @@ const esquemaCrear = z.object({
 const esquemaId = z.object({ id: z.uuid() });
 
 const esquemaFormato = z.object({
-  formato: z.enum(["srt", "vtt", "json"]).default("json"),
+  formato: z.enum(["srt", "vtt", "txt", "json"]).default("json"),
   descargar: z.enum(["0", "1"]).optional(),
 });
 
 export const videosRouter = Router();
 videosRouter.use(requiereUsuario);
+
+/** Nombre de archivo seguro para descargas: "<nombre>.<idioma>.<ext>". */
+function nombreDescarga(video: Video, extension: string): string {
+  const base = path.parse(video.nombre).name.replace(/[^\w.-]+/g, "_").slice(0, 80) || "video";
+  return `${base}.${video.idioma_destino}.${extension}`;
+}
 
 /** Busca el video del usuario o responde 404. */
 async function videoDelUsuario(req: Request, res: Response) {
@@ -111,6 +119,11 @@ videosRouter.get("/:id", async (req, res) => {
   res.json({
     ...video,
     url_reproduccion: video.storage_key ? await urlFirmada(video.storage_key) : null,
+    // Video con subtítulos incrustados, si ya se generó: se descarga con nombre propio.
+    url_exportacion:
+      video.export_estado === "listo" && video.export_key
+        ? await urlFirmada(video.export_key, 3600, nombreDescarga(video, "mp4"))
+        : null,
   });
 });
 
@@ -175,13 +188,44 @@ videosRouter.get("/:id/subtitulos", async (req, res) => {
   }
 
   const cues = generarCues(segmentos);
-  const cuerpo = formato === "srt" ? aSrt(cues) : aVtt(cues);
-  res.type(formato === "srt" ? "application/x-subrip" : "text/vtt").set("Cache-Control", "no-store");
-  if (descargar === "1") {
-    const base = path.parse(video.nombre).name.replace(/[^\w.-]+/g, "_").slice(0, 80) || "subtitulos";
-    res.attachment(`${base}.${video.idioma_destino}.${formato}`);
-  }
+  const idiomas = `${(video.idioma_origen ?? "?").toUpperCase()} → ${video.idioma_destino.toUpperCase()}`;
+  const [cuerpo, tipo] =
+    formato === "srt"
+      ? [aSrt(cues), "application/x-subrip"]
+      : formato === "vtt"
+        ? [aVtt(cues), "text/vtt"]
+        : [aTxt(segmentos, { titulo: video.nombre, idiomas }), "text/plain"];
+  res.type(tipo).set("Cache-Control", "no-store");
+  if (descargar === "1") res.attachment(nombreDescarga(video, formato));
   res.send(cuerpo);
+});
+
+/**
+ * POST /videos/:id/exportar — pide el video con los subtítulos incrustados.
+ * Es un trabajo en segundo plano (recodificar tarda): la app consulta
+ * GET /videos/:id hasta que `export_estado` sea "listo" y trae `url_exportacion`.
+ */
+videosRouter.post("/:id/exportar", async (req, res) => {
+  const video = await videoDelUsuario(req, res);
+  if (!video) return;
+  if (!video.storage_key) {
+    res.status(409).json({ error: "El video original todavía no está disponible." });
+    return;
+  }
+  if ((await listarSegmentosListos(video.id)).length === 0) {
+    res.status(409).json({ error: "Todavía no hay subtítulos traducidos para incrustar." });
+    return;
+  }
+  if (video.export_estado !== "procesando") {
+    await actualizarExportacion(video.id, { estado: "procesando" });
+    try {
+      await encolarExportacion(video.id);
+    } catch (err) {
+      // Queda "procesando": el barrido periódico de los workers lo retomará.
+      console.warn(`[exportar] ${video.id} sin encolar por ahora: ${describirError(err)}`);
+    }
+  }
+  res.status(202).json({ export_estado: "procesando" });
 });
 
 /**
@@ -204,6 +248,8 @@ videosRouter.post("/:id/reintentar", async (req, res) => {
   const ids = await reiniciarSegmentosConError(video.id);
   if (ids.length > 0) {
     await actualizarEstadoVideo(video.id, "procesando");
+    // Los subtítulos van a cambiar: el video exportado quedaría desactualizado.
+    if (video.export_estado) await actualizarExportacion(video.id, { estado: null });
     await Promise.all(ids.map((id) => encolarReintentoSegmento(id, 0)));
   }
   res.json({ reencolados: ids.length });
