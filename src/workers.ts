@@ -1,13 +1,21 @@
 import { Worker } from "bullmq";
 import { config } from "./config.js";
 import { pool } from "./db/pool.js";
-import type { JobProcesarVideo, JobReintentarSegmento } from "./models/types.js";
+import type { JobExportarVideo, JobProcesarVideo, JobReintentarSegmento } from "./models/types.js";
 import { recalcularEstadoVideo } from "./pipeline/estadoVideo.js";
 import { procesarSegmento } from "./pipeline/procesarSegmento.js";
+import { exportarVideo } from "./pipeline/exportarVideo.js";
 import { procesarVideo } from "./pipeline/procesarVideo.js";
-import { COLA_SEGMENTOS, COLA_VIDEOS, crearConexionRedis, encolarVideo } from "./queue/colas.js";
+import {
+  COLA_EXPORTACIONES,
+  COLA_SEGMENTOS,
+  COLA_VIDEOS,
+  crearConexionRedis,
+  encolarExportacion,
+  encolarVideo,
+} from "./queue/colas.js";
 import { obtenerSegmento } from "./repositories/segmentos.repo.js";
-import { actualizarEstadoVideo, obtenerVideo } from "./repositories/videos.repo.js";
+import { actualizarEstadoVideo, actualizarExportacion, obtenerVideo } from "./repositories/videos.repo.js";
 import { describirError, logLimitado, reintentarHastaLograr } from "./util/resiliencia.js";
 
 /**
@@ -52,9 +60,32 @@ export async function iniciarWorkers(): Promise<() => Promise<void>> {
     { connection: crearConexionRedis(), concurrency: config.WORKER_CONCURRENCIA_REINTENTOS },
   );
 
+  // Videos con subtítulos incrustados: recodificar es pesado, de a uno.
+  const workerExportaciones = new Worker<JobExportarVideo>(
+    COLA_EXPORTACIONES,
+    async (job) => {
+      console.log(`[exportar] generando video con subtítulos de ${job.data.videoId}`);
+      await exportarVideo(job.data.videoId);
+      console.log(`[exportar] ${job.data.videoId} listo`);
+    },
+    // Recodificar puede tardar minutos con poca CPU: el lock se renueva solo,
+    // pero se le da margen para que no se considere atascado.
+    { connection: crearConexionRedis(), concurrency: 1, lockDuration: 5 * 60_000 },
+  );
+  workerExportaciones.on("failed", async (job, err) => {
+    if (!job) return;
+    const ultimo = err.name === "UnrecoverableError" || job.attemptsMade >= (job.opts.attempts ?? 1);
+    console.error(`[exportar] ${job.data.videoId} falló${ultimo ? " definitivamente" : ""}: ${err.message}`);
+    if (!ultimo) return;
+    await actualizarExportacion(job.data.videoId, { estado: "error", error: err.message }).catch((e) =>
+      console.error(`[exportar] no se pudo marcar el error de ${job.data.videoId}: ${describirError(e)}`),
+    );
+  });
+
   // Redis caído: los workers reconectan solos; solo se registra (sin inundar los logs).
   workerVideos.on("error", logLimitado("worker videos"));
   workerSegmentos.on("error", logLimitado("worker segmentos"));
+  workerExportaciones.on("error", logLimitado("worker exportaciones"));
 
   // En segundo plano y con reintentos: si la base o Redis aún no responden,
   // el arranque no se bloquea ni se cae.
@@ -69,7 +100,7 @@ export async function iniciarWorkers(): Promise<() => Promise<void>> {
 
   return async () => {
     clearInterval(barrido);
-    await Promise.all([workerVideos.close(), workerSegmentos.close()]);
+    await Promise.all([workerVideos.close(), workerSegmentos.close(), workerExportaciones.close()]);
   };
 }
 
@@ -86,4 +117,8 @@ async function recuperarTrabajos(): Promise<void> {
   );
   for (const { id } of rows) await encolarVideo(id);
   if (rows.length > 0) console.log(`Recuperados ${rows.length} video(s) sin terminar`);
+
+  // Lo mismo para las exportaciones que quedaron a medias
+  const exportaciones = await pool.query<{ id: string }>("SELECT id FROM videos WHERE export_estado = 'procesando'");
+  for (const { id } of exportaciones.rows) await encolarExportacion(id);
 }

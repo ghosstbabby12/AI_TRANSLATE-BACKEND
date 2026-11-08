@@ -94,3 +94,34 @@ export async function extraerYDividirAudio(
 }
 
 const redondear = (n: number) => Math.round(n * 1000) / 1000;
+
+/**
+ * Genera un MP4 con los subtítulos incrustados ("quemados"): se ven en
+ * cualquier reproductor, sin archivos aparte. Hay que recodificar el video,
+ * así que se limita a 720p y se usa un preset rápido: en el plan gratuito de
+ * Render (CPU muy limitada) aun así puede tardar varios minutos.
+ */
+export async function quemarSubtitulos(rutaVideo: string, rutaSrt: string, salida: string): Promise<void> {
+  // Mismo estilo que el reproductor: texto blanco sobre una caja oscura translúcida.
+  const estilo = [
+    "FontName=DejaVu Sans",
+    "FontSize=18",
+    "PrimaryColour=&H00FFFFFF",
+    "BackColour=&H80000000",
+    "BorderStyle=3",
+    "Outline=1",
+    "Shadow=0",
+    "MarginV=28",
+  ].join(",");
+  await ejecutar(config.FFMPEG_PATH, [
+    "-hide_banner", "-loglevel", "error", "-y",
+    "-i", rutaVideo,
+    // Ancho máximo 1280 y dimensiones pares (libx264 las exige)
+    "-vf", `scale='trunc(min(1280,iw)/2)*2':-2,subtitles=filename=${rutaSrt}:force_style='${estilo}'`,
+    "-c:v", "libx264", "-preset", "superfast", "-crf", "26",
+    "-c:a", "aac", "-b:a", "128k",
+    // Permite empezar a reproducir antes de descargar el archivo completo
+    "-movflags", "+faststart",
+    salida,
+  ]);
+}

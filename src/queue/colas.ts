@@ -1,7 +1,7 @@
 import { Queue } from "bullmq";
 import { Redis } from "ioredis";
 import { config } from "../config.js";
-import type { JobProcesarVideo, JobReintentarSegmento } from "../models/types.js";
+import type { JobExportarVideo, JobProcesarVideo, JobReintentarSegmento } from "../models/types.js";
 import { conTiempoLimite, logLimitado } from "../util/resiliencia.js";
 
 // Workers: BullMQ exige maxRetriesPerRequest: null; esperan y reconectan solos.
@@ -30,11 +30,13 @@ const MENSAJE_COLA = "La cola de trabajos no está disponible en este momento. I
 
 export const COLA_VIDEOS = "videos";
 export const COLA_SEGMENTOS = "segmentos";
+export const COLA_EXPORTACIONES = "exportaciones";
 
 const conexion = crearConexionRedisRapida();
 
 export const colaVideos = new Queue<JobProcesarVideo>(COLA_VIDEOS, { connection: conexion });
 export const colaSegmentos = new Queue<JobReintentarSegmento>(COLA_SEGMENTOS, { connection: conexion });
+export const colaExportaciones = new Queue<JobExportarVideo>(COLA_EXPORTACIONES, { connection: conexion });
 
 /** Para /salud/detalle. */
 export const pingRedis = () => conTiempoLimite(conexion.ping(), 3_000);
@@ -79,4 +81,22 @@ export async function encolarReintentoSegmento(segmentoId: string, intentos: num
     },
   );
   await conTiempoLimite(agregar, 8_000, MENSAJE_COLA);
+}
+
+/** Video con subtítulos incrustados. Un solo job por video a la vez. */
+export function encolarExportacion(videoId: string): Promise<void> {
+  return conTiempoLimite(encolarExportacionSinLimite(videoId), 8_000, MENSAJE_COLA);
+}
+
+async function encolarExportacionSinLimite(videoId: string): Promise<void> {
+  const jobId = `export-${videoId}`;
+  // Como en encolarVideo: un job terminado o fallido con el mismo id impediría volver a generarlo.
+  const previo = await colaExportaciones.getJob(jobId);
+  if (previo && ((await previo.isFailed()) || (await previo.isCompleted()))) await previo.remove();
+
+  await colaExportaciones.add(
+    "exportar-video",
+    { videoId },
+    { jobId, attempts: 2, backoff: { type: "exponential", delay: 30_000 }, removeOnComplete: 100, removeOnFail: 100 },
+  );
 }

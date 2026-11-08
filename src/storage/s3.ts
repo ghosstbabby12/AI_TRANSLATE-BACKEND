@@ -21,6 +21,7 @@ const s3Publico = config.S3_PUBLIC_ENDPOINT
 
 export const claves = {
   videoOriginal: (videoId: string, ext: string) => `videos/${videoId}/original${ext}`,
+  videoSubtitulado: (videoId: string) => `videos/${videoId}/subtitulado.mp4`,
   audioSegmento: (videoId: string, indice: number) =>
     `videos/${videoId}/segmentos/${String(indice).padStart(5, "0")}.mp3`,
 };
@@ -43,9 +44,15 @@ export async function descargarBuffer(key: string): Promise<Buffer> {
   return Buffer.from(await res.Body!.transformToByteArray());
 }
 
-/** URL temporal para que el reproductor del frontend lea el video directo de S3. */
-export async function urlFirmada(key: string, segundos = 3600): Promise<string> {
-  return getSignedUrl(s3Publico, new GetObjectCommand({ Bucket: config.S3_BUCKET, Key: key }), {
-    expiresIn: segundos,
+/**
+ * URL temporal para que el navegador lea el archivo directo de S3/R2.
+ * Con `nombreDescarga`, el navegador lo descarga con ese nombre en vez de abrirlo.
+ */
+export async function urlFirmada(key: string, segundos = 3600, nombreDescarga?: string): Promise<string> {
+  const comando = new GetObjectCommand({
+    Bucket: config.S3_BUCKET,
+    Key: key,
+    ResponseContentDisposition: nombreDescarga ? `attachment; filename="${nombreDescarga}"` : undefined,
   });
+  return getSignedUrl(s3Publico, comando, { expiresIn: segundos });
 }
