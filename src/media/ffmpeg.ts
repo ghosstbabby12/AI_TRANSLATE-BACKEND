@@ -142,3 +142,20 @@ export async function extraerMiniatura(entrada: string, salida: string, segundo:
     salida,
   ]);
 }
+
+/**
+ * Foto de perfil: recorte cuadrado centrado y 256×256 en JPEG. Normaliza
+ * cualquier formato que ffmpeg entienda (JPEG, PNG, WebP, HEIC no) y quita
+ * metadatos como la ubicación GPS de la cámara.
+ */
+export async function procesarFotoPerfil(entrada: string, salida: string): Promise<void> {
+  await ejecutar(config.FFMPEG_PATH, [
+    "-hide_banner", "-loglevel", "error", "-y",
+    "-i", entrada,
+    "-vf", "crop='min(iw,ih)':'min(iw,ih)',scale=256:256",
+    "-frames:v", "1",
+    "-map_metadata", "-1",
+    "-q:v", "3",
+    salida,
+  ]);
+}

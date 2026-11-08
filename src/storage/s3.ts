@@ -32,6 +32,8 @@ export const claves = {
   miniatura: (storageKey: string) => `${storageKey.slice(0, storageKey.lastIndexOf("/") + 1)}miniatura.jpg`,
   audioSegmento: (videoId: string, indice: number) =>
     `videos/${videoId}/segmentos/${String(indice).padStart(5, "0")}.mp3`,
+  /** Nombre con marca de tiempo: al cambiar la foto, la URL cambia y no se sirve la vieja en caché. */
+  fotoPerfil: (usuarioId: string) => `usuarios/${usuarioId}/foto-${Date.now()}.jpg`,
 };
 
 /** Subida multipart en streaming: no carga el video entero en memoria. */

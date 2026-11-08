@@ -44,7 +44,7 @@ authRouter.post("/registro", async (req, res) => {
     return;
   }
   if (datos.usuario_anonimo) await reclamarVideosAnonimos(datos.usuario_anonimo, usuario.id);
-  res.status(201).json({ token: await firmarToken(usuario.id), usuario: aPublico(usuario) });
+  res.status(201).json({ token: await firmarToken(usuario.id), usuario: await aPublico(usuario) });
 });
 
 /** POST /auth/login */
@@ -69,7 +69,7 @@ authRouter.post("/login", async (req, res) => {
 
   await limpiarFallos(ip, datos.email);
   if (datos.usuario_anonimo) await reclamarVideosAnonimos(datos.usuario_anonimo, usuario.id);
-  res.json({ token: await firmarToken(usuario.id), usuario: aPublico(usuario) });
+  res.json({ token: await firmarToken(usuario.id), usuario: await aPublico(usuario) });
 });
 
 /** GET /auth/yo — datos del usuario de la sesión (valida el token guardado). */
@@ -79,5 +79,5 @@ authRouter.get("/yo", requiereUsuario, async (req, res) => {
     res.status(401).json({ error: "Sesión inválida" });
     return;
   }
-  res.json(aPublico(usuario));
+  res.json(await aPublico(usuario));
 });
