@@ -144,3 +144,30 @@ export async function listarTraducciones(
   );
   return rows;
 }
+
+/**
+ * Cambia el nombre. Si el video tiene archivo, se aplica a todas sus
+ * traducciones (son el mismo video en otros idiomas). Devuelve cuántos cambió.
+ */
+export async function renombrarVideo(video: Pick<Video, "id" | "usuario_id" | "storage_key">, nombre: string): Promise<number> {
+  const { rowCount } = video.storage_key
+    ? await pool.query(
+        "UPDATE videos SET nombre = $3, actualizado_en = now() WHERE usuario_id = $1 AND storage_key = $2",
+        [video.usuario_id, video.storage_key, nombre],
+      )
+    : await pool.query("UPDATE videos SET nombre = $2, actualizado_en = now() WHERE id = $1", [video.id, nombre]);
+  return rowCount ?? 0;
+}
+
+/** Borra el video (sus segmentos se borran en cascada). */
+export async function eliminarVideo(id: string): Promise<void> {
+  await pool.query("DELETE FROM videos WHERE id = $1", [id]);
+}
+
+/** Cuántos videos (de cualquier usuario) siguen usando ese archivo en S3. */
+export async function contarUsosDeArchivo(storageKey: string): Promise<number> {
+  const { rows } = await pool.query<{ n: number }>("SELECT count(*)::int AS n FROM videos WHERE storage_key = $1", [
+    storageKey,
+  ]);
+  return rows[0]?.n ?? 0;
+}

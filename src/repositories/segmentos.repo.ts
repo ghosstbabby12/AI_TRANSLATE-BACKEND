@@ -96,13 +96,14 @@ export async function marcarSegmentoListo(id: string, textoTraducido: string): P
 /**
  * Registra un fallo. Vuelve a 'pendiente' (para reintento) mientras queden
  * intentos; al agotarlos, o si el error no es recuperable, queda en 'error'.
+ * Devuelve null si el segmento ya no existe (el video se eliminó).
  */
 export async function registrarFalloSegmento(
   id: string,
   mensaje: string,
   maxIntentos: number,
   recuperable: boolean,
-): Promise<Segmento> {
+): Promise<Segmento | null> {
   const { rows } = await pool.query<Segmento>(
     `UPDATE segmentos
        SET intentos = intentos + 1,
@@ -113,7 +114,7 @@ export async function registrarFalloSegmento(
      RETURNING *`,
     [id, mensaje.slice(0, 1000), maxIntentos, recuperable],
   );
-  return rows[0]!;
+  return rows[0] ?? null;
 }
 
 export async function progresoVideo(videoId: string): Promise<ProgresoVideo> {

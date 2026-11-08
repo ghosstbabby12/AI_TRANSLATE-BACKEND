@@ -59,6 +59,7 @@ export async function procesarSegmento(segmentoId: string, idiomaDestino: string
   } catch (err) {
     const { mensaje, recuperable } = clasificarError(err);
     const actualizado = await registrarFalloSegmento(seg.id, mensaje, config.MAX_INTENTOS_SEGMENTO, recuperable);
+    if (!actualizado) return "omitido"; // el video se eliminó mientras se procesaba
     console.warn(
       `Segmento ${seg.indice} del video ${seg.video_id} falló (intento ${actualizado.intentos}): ${mensaje}`,
     );
