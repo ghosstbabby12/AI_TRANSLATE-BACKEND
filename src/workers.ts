@@ -8,6 +8,7 @@ import { procesarVideo } from "./pipeline/procesarVideo.js";
 import { COLA_SEGMENTOS, COLA_VIDEOS, crearConexionRedis, encolarVideo } from "./queue/colas.js";
 import { obtenerSegmento } from "./repositories/segmentos.repo.js";
 import { actualizarEstadoVideo, obtenerVideo } from "./repositories/videos.repo.js";
+import { describirError, logLimitado, reintentarHastaLograr } from "./util/resiliencia.js";
 
 /**
  * Arranca los consumidores de las dos colas. Lo usa el proceso worker
@@ -30,7 +31,11 @@ export async function iniciarWorkers(): Promise<() => Promise<void>> {
     if (!job) return;
     const ultimo = err.name === "UnrecoverableError" || job.attemptsMade >= (job.opts.attempts ?? 1);
     console.error(`[videos] ${job.data.videoId} falló${ultimo ? " definitivamente" : ""}: ${err.message}`);
-    if (ultimo) await actualizarEstadoVideo(job.data.videoId, "error", err.message.slice(0, 1000));
+    if (!ultimo) return;
+    // Si la base tampoco responde, no debe convertirse en un rechazo sin capturar.
+    await actualizarEstadoVideo(job.data.videoId, "error", err.message.slice(0, 1000)).catch((e) =>
+      console.error(`[videos] no se pudo marcar ${job.data.videoId} como error: ${describirError(e)}`),
+    );
   });
 
   const workerSegmentos = new Worker<JobReintentarSegmento>(
@@ -47,18 +52,32 @@ export async function iniciarWorkers(): Promise<() => Promise<void>> {
     { connection: crearConexionRedis(), concurrency: config.WORKER_CONCURRENCIA_REINTENTOS },
   );
 
-  await recuperarTrabajos();
+  // Redis caído: los workers reconectan solos; solo se registra (sin inundar los logs).
+  workerVideos.on("error", logLimitado("worker videos"));
+  workerSegmentos.on("error", logLimitado("worker segmentos"));
+
+  // En segundo plano y con reintentos: si la base o Redis aún no responden,
+  // el arranque no se bloquea ni se cae.
+  void reintentarHastaLograr("recuperar trabajos", recuperarTrabajos);
+  // Y luego cada 2 minutos: si Redis se cayó un rato, los videos que no se
+  // pudieron encolar (o cuya cola se perdió) se retoman solos.
+  const barrido = setInterval(() => {
+    recuperarTrabajos().catch(logLimitado("recuperar trabajos"));
+  }, 2 * 60_000);
+  barrido.unref();
   console.log("Worker escuchando colas:", COLA_VIDEOS, COLA_SEGMENTOS);
 
   return async () => {
+    clearInterval(barrido);
     await Promise.all([workerVideos.close(), workerSegmentos.close()]);
   };
 }
 
 /**
- * Si Redis perdió la cola (el Key Value gratuito de Render no persiste) o el
- * proceso murió a mitad de un video, esos videos quedarían "procesando" para
- * siempre. Al arrancar se vuelven a encolar; procesarVideo retoma solo los
+ * Si Redis perdió la cola (el Key Value gratuito de Render no persiste), no
+ * estaba disponible al crear el video, o el proceso murió a mitad de un video,
+ * esos videos quedarían "pendiente"/"procesando" para siempre. Se vuelven a
+ * encolar al arrancar y periódicamente; procesarVideo retoma solo los
  * segmentos pendientes, y encolarVideo no duplica un job que siga en la cola.
  */
 async function recuperarTrabajos(): Promise<void> {

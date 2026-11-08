@@ -22,6 +22,7 @@ import {
 } from "../../repositories/videos.repo.js";
 import { claves, subirArchivo, urlFirmada } from "../../storage/s3.js";
 import { aSrt, aVtt, generarCues } from "../../subtitulos/formatos.js";
+import { describirError } from "../../util/resiliencia.js";
 import { requiereUsuario } from "../middleware/usuario.js";
 
 const upload = multer({
@@ -84,7 +85,13 @@ videosRouter.post("/", upload.single("video"), async (req, res) => {
       storageKey,
       idiomaDestino: datos.idioma_destino,
     });
-    await encolarVideo(video.id);
+    try {
+      await encolarVideo(video.id);
+    } catch (err) {
+      // El video ya quedó guardado como "pendiente": el barrido periódico de
+      // los workers lo encolará cuando Redis vuelva. No es un error para el usuario.
+      console.warn(`[videos] ${video.id} sin encolar por ahora: ${describirError(err)}`);
+    }
 
     res.status(201).json(video);
   } finally {
