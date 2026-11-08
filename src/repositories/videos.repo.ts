@@ -94,3 +94,53 @@ export async function actualizarExportacion(
     [id, datos.estado, datos.key ?? null, datos.error?.slice(0, 1000) ?? null],
   );
 }
+
+/**
+ * Nueva traducción de un video ya transcrito: copia el video (mismo archivo
+ * en S3) y sus segmentos con el texto original y los tiempos, pero sin
+ * traducción. El pipeline normal solo traducirá: procesarSegmento salta la
+ * transcripción cuando texto_original ya existe. Todo en una transacción.
+ */
+export async function crearTraduccion(origenId: string, idiomaDestino: string): Promise<Video> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query<Video>(
+      `INSERT INTO videos (usuario_id, nombre, origen_tipo, origen_url, storage_key, idioma_destino,
+                           idioma_origen, estado, total_segmentos, duracion_seg)
+       SELECT usuario_id, nombre, origen_tipo, origen_url, storage_key, $2,
+              idioma_origen, 'procesando', total_segmentos, duracion_seg
+         FROM videos WHERE id = $1
+       RETURNING *`,
+      [origenId, idiomaDestino],
+    );
+    const nuevo = rows[0]!;
+    await client.query(
+      `INSERT INTO segmentos (video_id, indice, tiempo_inicio, tiempo_fin, audio_key, texto_original)
+       SELECT $1, indice, tiempo_inicio, tiempo_fin, audio_key, texto_original
+         FROM segmentos WHERE video_id = $2`,
+      [nuevo.id, origenId],
+    );
+    await client.query("COMMIT");
+    return nuevo;
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** Todas las traducciones del mismo archivo del usuario (incluida la indicada). */
+export async function listarTraducciones(
+  usuarioId: string,
+  storageKey: string,
+): Promise<Pick<Video, "id" | "idioma_destino" | "estado">[]> {
+  const { rows } = await pool.query<Pick<Video, "id" | "idioma_destino" | "estado">>(
+    `SELECT id, idioma_destino, estado FROM videos
+      WHERE usuario_id = $1 AND storage_key = $2
+      ORDER BY creado_en`,
+    [usuarioId, storageKey],
+  );
+  return rows;
+}
