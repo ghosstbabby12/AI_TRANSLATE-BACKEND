@@ -49,6 +49,17 @@ const esquemaFormato = z.object({
 export const videosRouter = Router();
 videosRouter.use(requiereUsuario);
 
+/**
+ * multer entrega el nombre del archivo decodificado como Latin-1, así que
+ * cualquier carácter no ASCII llega roto (macOS, por ejemplo, pone un espacio
+ * estrecho U+202F antes de "p.m." en las grabaciones de pantalla).
+ */
+function nombreOriginal(nombre: string): string {
+  const utf8 = Buffer.from(nombre, "latin1").toString("utf8");
+  // Si no era UTF-8 válido, aparece el carácter de reemplazo: se deja como vino.
+  return utf8.includes("\uFFFD") ? nombre : utf8;
+}
+
 /** Nombre de archivo seguro para descargas: "<nombre>.<idioma>.<ext>". */
 function nombreDescarga(video: Video, extension: string): string {
   const base = path.parse(video.nombre).name.replace(/[^\w.-]+/g, "_").slice(0, 80) || "video";
@@ -87,7 +98,7 @@ videosRouter.post("/", upload.single("video"), async (req, res) => {
     const video = await crearVideo({
       id,
       usuarioId: req.usuarioId!,
-      nombre: datos.nombre ?? archivo?.originalname ?? datos.url!,
+      nombre: datos.nombre ?? (archivo ? nombreOriginal(archivo.originalname) : datos.url!),
       origenTipo: archivo ? "archivo" : "url",
       origenUrl: datos.url ?? null,
       storageKey,
