@@ -86,8 +86,16 @@ async function prepararSegmentos(video: Video): Promise<void> {
     const trozos = await extraerYDividirAudio(rutaVideo, dir, config.SEGMENTO_SEGUNDOS);
     if (trozos.length === 0) throw new UnrecoverableError("No se obtuvo audio del video");
 
-    // 3. Trozos a S3 (de a 5 en paralelo) y filas en la BD
+    // 3. Trozos a S3 (de a 5 en paralelo) y filas en la BD.
+    // registrarDivision va ANTES que los segmentos: si el proceso se reinicia
+    // entre ambos pasos, el reintento ve que no hay segmentos y repite la
+    // preparación. Al revés, quedaría sin storage_key (video sin reproducir).
     await subirTrozos(video.id, trozos);
+    await registrarDivision(video.id, {
+      totalSegmentos: trozos.length,
+      duracionSeg: trozos.at(-1)!.fin,
+      storageKey,
+    });
     await insertarSegmentos(
       video.id,
       trozos.map((t) => ({
@@ -97,11 +105,6 @@ async function prepararSegmentos(video: Video): Promise<void> {
         audioKey: claves.audioSegmento(video.id, t.indice),
       })),
     );
-    await registrarDivision(video.id, {
-      totalSegmentos: trozos.length,
-      duracionSeg: trozos.at(-1)!.fin,
-      storageKey,
-    });
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
