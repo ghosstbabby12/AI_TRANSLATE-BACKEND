@@ -28,6 +28,8 @@ const s3Publico = config.S3_PUBLIC_ENDPOINT
 export const claves = {
   videoOriginal: (videoId: string, ext: string) => `videos/${videoId}/original${ext}`,
   videoSubtitulado: (videoId: string) => `videos/${videoId}/subtitulado.mp4`,
+  /** En la carpeta del original: así la comparten todas sus traducciones. */
+  miniatura: (storageKey: string) => `${storageKey.slice(0, storageKey.lastIndexOf("/") + 1)}miniatura.jpg`,
   audioSegmento: (videoId: string, indice: number) =>
     `videos/${videoId}/segmentos/${String(indice).padStart(5, "0")}.mp3`,
 };
@@ -83,4 +85,9 @@ export async function borrarPrefijo(prefijo: string): Promise<number> {
     token = lista.IsTruncated ? lista.NextContinuationToken : undefined;
   } while (token);
   return borrados;
+}
+
+/** URL firmada para que ffmpeg lea desde el servidor (endpoint interno, no el público). */
+export async function urlFirmadaInterna(key: string, segundos = 600): Promise<string> {
+  return getSignedUrl(s3, new GetObjectCommand({ Bucket: config.S3_BUCKET, Key: key }), { expiresIn: segundos });
 }

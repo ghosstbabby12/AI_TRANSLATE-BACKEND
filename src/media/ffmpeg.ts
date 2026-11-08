@@ -125,3 +125,20 @@ export async function quemarSubtitulos(rutaVideo: string, rutaSrt: string, salid
     salida,
   ]);
 }
+
+/**
+ * Extrae un fotograma como JPEG de 640 px de ancho para la vista previa.
+ * `entrada` puede ser un archivo local o una URL (S3 firmada): con -ss antes
+ * de -i, ffmpeg salta al instante pedido y solo descarga lo necesario.
+ */
+export async function extraerMiniatura(entrada: string, salida: string, segundo: number): Promise<void> {
+  await ejecutar(config.FFMPEG_PATH, [
+    "-hide_banner", "-loglevel", "error", "-y",
+    "-ss", segundo.toFixed(2),
+    "-i", entrada,
+    "-frames:v", "1",
+    "-vf", "scale=640:-2",
+    "-q:v", "4",
+    salida,
+  ]);
+}

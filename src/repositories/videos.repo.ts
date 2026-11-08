@@ -107,9 +107,9 @@ export async function crearTraduccion(origenId: string, idiomaDestino: string): 
     await client.query("BEGIN");
     const { rows } = await client.query<Video>(
       `INSERT INTO videos (usuario_id, nombre, origen_tipo, origen_url, storage_key, idioma_destino,
-                           idioma_origen, estado, total_segmentos, duracion_seg)
+                           idioma_origen, estado, total_segmentos, duracion_seg, miniatura_key)
        SELECT usuario_id, nombre, origen_tipo, origen_url, storage_key, $2,
-              idioma_origen, 'procesando', total_segmentos, duracion_seg
+              idioma_origen, 'procesando', total_segmentos, duracion_seg, miniatura_key
          FROM videos WHERE id = $1
        RETURNING *`,
       [origenId, idiomaDestino],
@@ -170,4 +170,21 @@ export async function contarUsosDeArchivo(storageKey: string): Promise<number> {
     storageKey,
   ]);
   return rows[0]?.n ?? 0;
+}
+
+/** Guarda la miniatura en todos los videos que comparten el archivo. */
+export async function registrarMiniatura(storageKey: string, miniaturaKey: string): Promise<void> {
+  await pool.query("UPDATE videos SET miniatura_key = $2 WHERE storage_key = $1", [storageKey, miniaturaKey]);
+}
+
+/** Archivos con video pero sin miniatura (p. ej. subidos antes de esta función). */
+export async function archivosSinMiniatura(limite: number): Promise<{ storage_key: string; duracion_seg: number | null }[]> {
+  const { rows } = await pool.query<{ storage_key: string; duracion_seg: number | null }>(
+    `SELECT storage_key, max(duracion_seg) AS duracion_seg FROM videos
+      WHERE storage_key IS NOT NULL AND miniatura_key IS NULL AND total_segmentos IS NOT NULL
+      GROUP BY storage_key
+      LIMIT $1`,
+    [limite],
+  );
+  return rows;
 }

@@ -19,6 +19,7 @@ export interface Video {
   export_estado: EstadoExportacion | null;
   export_key: string | null;
   export_error: string | null;
+  miniatura_key: string | null;
   creado_en: Date;
   actualizado_en: Date;
 }
