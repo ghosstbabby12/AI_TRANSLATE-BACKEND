@@ -129,7 +129,13 @@ videosRouter.post("/", upload.single("video"), async (req, res) => {
 
 /** GET /videos — historial del usuario, el más reciente primero. */
 videosRouter.get("/", async (req, res) => {
-  res.json(await listarVideosDeUsuario(req.usuarioId!));
+  const videos = await listarVideosDeUsuario(req.usuarioId!);
+  // Firmar una URL es un cálculo local (sin red): no encarece el listado
+  res.json(
+    await Promise.all(
+      videos.map(async (v) => ({ ...v, url_miniatura: v.miniatura_key ? await urlFirmada(v.miniatura_key) : null })),
+    ),
+  );
 });
 
 /** GET /videos/:id — detalle + URL temporal para el reproductor. */
@@ -141,6 +147,7 @@ videosRouter.get("/:id", async (req, res) => {
     // Todas las traducciones del mismo archivo, para saltar entre idiomas
     traducciones: video.storage_key ? await listarTraducciones(video.usuario_id, video.storage_key) : [],
     url_reproduccion: video.storage_key ? await urlFirmada(video.storage_key) : null,
+    url_miniatura: video.miniatura_key ? await urlFirmada(video.miniatura_key) : null,
     // Video con subtítulos incrustados, si ya se generó: se descarga con nombre propio.
     url_exportacion:
       video.export_estado === "listo" && video.export_key

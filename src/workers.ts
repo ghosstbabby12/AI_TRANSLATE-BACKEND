@@ -5,6 +5,7 @@ import type { JobExportarVideo, JobProcesarVideo, JobReintentarSegmento } from "
 import { recalcularEstadoVideo } from "./pipeline/estadoVideo.js";
 import { procesarSegmento } from "./pipeline/procesarSegmento.js";
 import { exportarVideo } from "./pipeline/exportarVideo.js";
+import { completarMiniaturas } from "./pipeline/miniatura.js";
 import { procesarVideo } from "./pipeline/procesarVideo.js";
 import {
   COLA_EXPORTACIONES,
@@ -94,7 +95,10 @@ export async function iniciarWorkers(): Promise<() => Promise<void>> {
   // pudieron encolar (o cuya cola se perdió) se retoman solos.
   const barrido = setInterval(() => {
     recuperarTrabajos().catch(logLimitado("recuperar trabajos"));
+    // Miniaturas de videos anteriores a esta función, de a pocas por vuelta
+    completarMiniaturas().catch(logLimitado("miniaturas"));
   }, 2 * 60_000);
+  void completarMiniaturas().catch(logLimitado("miniaturas"));
   barrido.unref();
   console.log("Worker escuchando colas:", COLA_VIDEOS, COLA_SEGMENTOS);
 

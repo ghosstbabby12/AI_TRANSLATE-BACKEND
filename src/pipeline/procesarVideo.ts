@@ -14,6 +14,7 @@ import { actualizarEstadoVideo, obtenerVideo, registrarDivision } from "../repos
 import type { Video } from "../models/types.js";
 import { claves, descargarArchivo, subirArchivo } from "../storage/s3.js";
 import { recalcularEstadoVideo } from "./estadoVideo.js";
+import { generarMiniatura } from "./miniatura.js";
 import { procesarSegmento } from "./procesarSegmento.js";
 
 /**
@@ -96,6 +97,8 @@ async function prepararSegmentos(video: Video): Promise<void> {
       duracionSeg: trozos.at(-1)!.fin,
       storageKey,
     });
+    // Vista previa: el video ya está en disco, extraer un fotograma es inmediato
+    await generarMiniatura(storageKey ?? video.storage_key!, trozos.at(-1)!.fin, rutaVideo);
     await insertarSegmentos(
       video.id,
       trozos.map((t) => ({
