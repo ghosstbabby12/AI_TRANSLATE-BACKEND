@@ -17,6 +17,8 @@ import {
 import {
   actualizarEstadoVideo,
   actualizarExportacion,
+  crearTraduccion,
+  listarTraducciones,
   crearVideo,
   listarVideosDeUsuario,
   obtenerVideoDeUsuario,
@@ -40,6 +42,8 @@ const esquemaCrear = z.object({
 });
 
 const esquemaId = z.object({ id: z.uuid() });
+
+const esquemaTraducir = z.object({ idioma_destino: z.enum(CODIGOS_IDIOMA) });
 
 const esquemaFormato = z.object({
   formato: z.enum(["srt", "vtt", "txt", "json"]).default("json"),
@@ -129,6 +133,8 @@ videosRouter.get("/:id", async (req, res) => {
   if (!video) return;
   res.json({
     ...video,
+    // Todas las traducciones del mismo archivo, para saltar entre idiomas
+    traducciones: video.storage_key ? await listarTraducciones(video.usuario_id, video.storage_key) : [],
     url_reproduccion: video.storage_key ? await urlFirmada(video.storage_key) : null,
     // Video con subtítulos incrustados, si ya se generó: se descarga con nombre propio.
     url_exportacion:
@@ -209,6 +215,39 @@ videosRouter.get("/:id/subtitulos", async (req, res) => {
   res.type(tipo).set("Cache-Control", "no-store");
   if (descargar === "1") res.attachment(nombreDescarga(video, formato));
   res.send(cuerpo);
+});
+
+/**
+ * POST /videos/:id/traducir — traduce los subtítulos ya generados a otro idioma.
+ * Reutiliza la transcripción (no vuelve a descargar ni transcribir el audio):
+ * crea una traducción nueva del mismo video y solo corre el paso de traducir.
+ * Si ya existe una traducción a ese idioma, devuelve esa.
+ */
+videosRouter.post("/:id/traducir", async (req, res) => {
+  const video = await videoDelUsuario(req, res);
+  if (!video) return;
+  const { idioma_destino } = esquemaTraducir.parse(req.body);
+
+  if (!video.storage_key || video.total_segmentos === null) {
+    res.status(409).json({ error: "Espera a que el video termine de prepararse para traducirlo a otro idioma." });
+    return;
+  }
+  const existente = (await listarTraducciones(video.usuario_id, video.storage_key)).find(
+    (t) => t.idioma_destino === idioma_destino,
+  );
+  if (existente) {
+    res.json({ id: existente.id, existente: true });
+    return;
+  }
+
+  const nuevo = await crearTraduccion(video.id, idioma_destino);
+  try {
+    await encolarVideo(nuevo.id);
+  } catch (err) {
+    // Queda "procesando": el barrido periódico de los workers la retomará.
+    console.warn(`[traducir] ${nuevo.id} sin encolar por ahora: ${describirError(err)}`);
+  }
+  res.status(201).json({ id: nuevo.id, existente: false });
 });
 
 /**
