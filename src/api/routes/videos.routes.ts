@@ -17,13 +17,16 @@ import {
 import {
   actualizarEstadoVideo,
   actualizarExportacion,
+  contarUsosDeArchivo,
   crearTraduccion,
+  eliminarVideo,
   listarTraducciones,
+  renombrarVideo,
   crearVideo,
   listarVideosDeUsuario,
   obtenerVideoDeUsuario,
 } from "../../repositories/videos.repo.js";
-import { claves, subirArchivo, urlFirmada } from "../../storage/s3.js";
+import { borrarObjeto, borrarPrefijo, claves, subirArchivo, urlFirmada } from "../../storage/s3.js";
 import { aSrt, aTxt, aVtt, generarCues } from "../../subtitulos/formatos.js";
 import type { Video } from "../../models/types.js";
 import { describirError } from "../../util/resiliencia.js";
@@ -44,6 +47,8 @@ const esquemaCrear = z.object({
 const esquemaId = z.object({ id: z.uuid() });
 
 const esquemaTraducir = z.object({ idioma_destino: z.enum(CODIGOS_IDIOMA) });
+
+const esquemaRenombrar = z.object({ nombre: z.string().trim().min(1, "Escribe un nombre").max(200) });
 
 const esquemaFormato = z.object({
   formato: z.enum(["srt", "vtt", "txt", "json"]).default("json"),
@@ -142,6 +147,45 @@ videosRouter.get("/:id", async (req, res) => {
         ? await urlFirmada(video.export_key, 3600, nombreDescarga(video, "mp4"))
         : null,
   });
+});
+
+/**
+ * PATCH /videos/:id — cambia el nombre. Se aplica también a las demás
+ * traducciones del mismo video, que son el mismo contenido en otro idioma.
+ */
+videosRouter.patch("/:id", async (req, res) => {
+  const video = await videoDelUsuario(req, res);
+  if (!video) return;
+  const { nombre } = esquemaRenombrar.parse(req.body);
+  const actualizados = await renombrarVideo(video, nombre);
+  res.json({ nombre, actualizados });
+});
+
+/**
+ * DELETE /videos/:id — elimina esta traducción. Si ningún otro video usa el
+ * mismo archivo, también se borran de S3 el original y los trozos de audio.
+ */
+videosRouter.delete("/:id", async (req, res) => {
+  const video = await videoDelUsuario(req, res);
+  if (!video) return;
+  await eliminarVideo(video.id);
+  res.status(204).end();
+
+  // Limpieza de almacenamiento después de responder: si falla, solo se registra
+  // (el video ya no existe para el usuario; quedaría un archivo huérfano).
+  void (async () => {
+    try {
+      if (video.export_key) await borrarObjeto(video.export_key);
+      if (video.storage_key && (await contarUsosDeArchivo(video.storage_key)) === 0) {
+        // Original, trozos de audio y exportación viven bajo la carpeta del video que se subió
+        const carpeta = video.storage_key.slice(0, video.storage_key.lastIndexOf("/") + 1);
+        const borrados = await borrarPrefijo(carpeta);
+        console.log(`[eliminar] ${video.id}: ${borrados} archivo(s) borrados de ${carpeta}`);
+      }
+    } catch (err) {
+      console.error(`[eliminar] no se pudo limpiar el almacenamiento de ${video.id}: ${describirError(err)}`);
+    }
+  })();
 });
 
 /**
