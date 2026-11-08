@@ -80,3 +80,22 @@ export function aVtt(cues: Cue[]): string {
   const cuerpo = cues.map((c) => `${tiempo(c.inicio, ".")} --> ${tiempo(c.fin, ".")}\n${c.texto}\n`).join("\n");
   return `WEBVTT\n\n${cuerpo}`;
 }
+
+const marcaTiempo = (seg: number) => {
+  const s = Math.floor(seg);
+  const h = Math.floor(s / 3600);
+  const mm = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
+  const ss = String(s % 60).padStart(2, "0");
+  return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
+};
+
+/**
+ * Transcripción legible en texto plano: un párrafo por segmento con su
+ * marca de tiempo. Pensado para leer o copiar, no para un reproductor.
+ */
+export function aTxt(segmentos: Segmento[], encabezado: { titulo: string; idiomas: string }): string {
+  const parrafos = segmentos
+    .filter((s) => s.texto_traducido?.trim())
+    .map((s) => `[${marcaTiempo(s.tiempo_inicio)}] ${s.texto_traducido!.trim()}`);
+  return `${encabezado.titulo}\n${encabezado.idiomas}\n\n${parrafos.join("\n\n")}\n`;
+}

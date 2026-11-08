@@ -1,6 +1,7 @@
 export type EstadoVideo = "pendiente" | "procesando" | "completo" | "error";
 export type EstadoSegmento = "pendiente" | "procesando" | "listo" | "error";
 export type OrigenTipo = "archivo" | "url";
+export type EstadoExportacion = "procesando" | "listo" | "error";
 
 export interface Video {
   id: string;
@@ -15,6 +16,9 @@ export interface Video {
   total_segmentos: number | null;
   duracion_seg: number | null;
   error: string | null;
+  export_estado: EstadoExportacion | null;
+  export_key: string | null;
+  export_error: string | null;
   creado_en: Date;
   actualizado_en: Date;
 }
@@ -49,4 +53,8 @@ export interface JobProcesarVideo {
 
 export interface JobReintentarSegmento {
   segmentoId: string;
+}
+
+export interface JobExportarVideo {
+  videoId: string;
 }

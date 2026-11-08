@@ -1,5 +1,5 @@
 import { pool } from "../db/pool.js";
-import type { EstadoVideo, OrigenTipo, Video } from "../models/types.js";
+import type { EstadoExportacion, EstadoVideo, OrigenTipo, Video } from "../models/types.js";
 
 export interface NuevoVideo {
   id: string;
@@ -81,5 +81,16 @@ export async function registrarIdiomaOrigen(id: string, idioma: string): Promise
   await pool.query(
     "UPDATE videos SET idioma_origen = $2 WHERE id = $1 AND idioma_origen IS NULL",
     [id, idioma],
+  );
+}
+
+/** Estado del video con subtítulos incrustados (ver pipeline/exportarVideo.ts). */
+export async function actualizarExportacion(
+  id: string,
+  datos: { estado: EstadoExportacion | null; key?: string | null; error?: string | null },
+): Promise<void> {
+  await pool.query(
+    "UPDATE videos SET export_estado = $2, export_key = $3, export_error = $4, actualizado_en = now() WHERE id = $1",
+    [id, datos.estado, datos.key ?? null, datos.error?.slice(0, 1000) ?? null],
   );
 }
