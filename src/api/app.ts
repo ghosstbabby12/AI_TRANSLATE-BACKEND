@@ -7,6 +7,8 @@ import { conTiempoLimite, describirError } from "../util/resiliencia.js";
 import { IDIOMAS } from "../idiomas.js";
 import { manejadorErrores } from "./middleware/errores.js";
 import { authRouter } from "./routes/auth.routes.js";
+import { perfilRouter } from "./routes/perfil.routes.js";
+import { requiereUsuario } from "./middleware/usuario.js";
 import { videosRouter } from "./routes/videos.routes.js";
 
 export function crearApp() {
@@ -58,6 +60,7 @@ export function crearApp() {
     res.json(Object.entries(IDIOMAS).map(([codigo, nombre]) => ({ codigo, nombre })));
   });
   app.use("/auth", requiereBaseLista, authRouter);
+  app.use("/perfil", requiereBaseLista, requiereUsuario, perfilRouter);
   app.use("/videos", requiereBaseLista, videosRouter);
 
   // Express 5 propaga los errores de handlers async hasta aquí.
