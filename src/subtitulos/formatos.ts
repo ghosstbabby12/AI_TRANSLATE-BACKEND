@@ -81,7 +81,7 @@ export function aVtt(cues: Cue[]): string {
   return `WEBVTT\n\n${cuerpo}`;
 }
 
-const marcaTiempo = (seg: number) => {
+export const marcaTiempo = (seg: number) => {
   const s = Math.floor(seg);
   const h = Math.floor(s / 3600);
   const mm = String(Math.floor((s % 3600) / 60)).padStart(2, "0");
@@ -98,4 +98,20 @@ export function aTxt(segmentos: Segmento[], encabezado: { titulo: string; idioma
     .filter((s) => s.texto_traducido?.trim())
     .map((s) => `[${marcaTiempo(s.tiempo_inicio)}] ${s.texto_traducido!.trim()}`);
   return `${encabezado.titulo}\n${encabezado.idiomas}\n\n${parrafos.join("\n\n")}\n`;
+}
+
+/**
+ * Resumen en texto plano para descargar. El resumen guardado usa "## Título"
+ * para las secciones; en el .txt se subrayan para que se lean como títulos.
+ */
+export function aTxtResumen(resumen: string, encabezado: { titulo: string; idiomas: string }): string {
+  const cuerpo = resumen
+    .trim()
+    .split("\n")
+    .map((linea) => {
+      const titulo = /^#{1,6}\s+(.+)$/.exec(linea.trim())?.[1];
+      return titulo ? `${titulo.toUpperCase()}\n${"─".repeat(Math.min(titulo.length, 60))}` : linea;
+    })
+    .join("\n");
+  return `${encabezado.titulo}\n${encabezado.idiomas}\n\n${cuerpo}\n`;
 }

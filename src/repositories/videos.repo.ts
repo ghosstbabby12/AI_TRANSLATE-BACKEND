@@ -96,6 +96,27 @@ export async function actualizarExportacion(
 }
 
 /**
+ * Estado del resumen con IA (ver pipeline/resumirVideo.ts). Si no se pasa
+ * `texto`, se conserva el que hubiera: al regenerar, o si la regeneración
+ * falla, el usuario sigue teniendo el resumen anterior.
+ */
+export async function actualizarResumen(
+  id: string,
+  datos: { estado: EstadoExportacion | null; texto?: string | null; error?: string | null },
+): Promise<void> {
+  await pool.query(
+    `UPDATE videos
+        SET resumen_estado = $2::text,
+            resumen_texto = CASE WHEN $5 THEN $3 ELSE resumen_texto END,
+            resumen_error = $4,
+            resumen_en = CASE WHEN $2::text = 'listo' THEN now() ELSE resumen_en END,
+            actualizado_en = now()
+      WHERE id = $1`,
+    [id, datos.estado, datos.texto ?? null, datos.error?.slice(0, 1000) ?? null, datos.texto !== undefined],
+  );
+}
+
+/**
  * Nueva traducción de un video ya transcrito: copia el video (mismo archivo
  * en S3) y sus segmentos con el texto original y los tiempos, pero sin
  * traducción. El pipeline normal solo traducirá: procesarSegmento salta la

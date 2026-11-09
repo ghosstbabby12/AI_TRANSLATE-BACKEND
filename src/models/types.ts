@@ -20,6 +20,10 @@ export interface Video {
   export_key: string | null;
   export_error: string | null;
   miniatura_key: string | null;
+  resumen_estado: EstadoExportacion | null;
+  resumen_texto: string | null;
+  resumen_error: string | null;
+  resumen_en: Date | null;
   creado_en: Date;
   actualizado_en: Date;
 }
@@ -57,5 +61,9 @@ export interface JobReintentarSegmento {
 }
 
 export interface JobExportarVideo {
+  videoId: string;
+}
+
+export interface JobResumirVideo {
   videoId: string;
 }

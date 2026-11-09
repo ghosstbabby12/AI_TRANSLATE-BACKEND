@@ -1,7 +1,7 @@
 import { Queue } from "bullmq";
 import { Redis } from "ioredis";
 import { config } from "../config.js";
-import type { JobExportarVideo, JobProcesarVideo, JobReintentarSegmento } from "../models/types.js";
+import type { JobExportarVideo, JobProcesarVideo, JobReintentarSegmento, JobResumirVideo } from "../models/types.js";
 import { conTiempoLimite, logLimitado } from "../util/resiliencia.js";
 
 // Workers: BullMQ exige maxRetriesPerRequest: null; esperan y reconectan solos.
@@ -31,12 +31,14 @@ const MENSAJE_COLA = "La cola de trabajos no está disponible en este momento. I
 export const COLA_VIDEOS = "videos";
 export const COLA_SEGMENTOS = "segmentos";
 export const COLA_EXPORTACIONES = "exportaciones";
+export const COLA_RESUMENES = "resumenes";
 
 const conexion = crearConexionRedisRapida();
 
 export const colaVideos = new Queue<JobProcesarVideo>(COLA_VIDEOS, { connection: conexion });
 export const colaSegmentos = new Queue<JobReintentarSegmento>(COLA_SEGMENTOS, { connection: conexion });
 export const colaExportaciones = new Queue<JobExportarVideo>(COLA_EXPORTACIONES, { connection: conexion });
+export const colaResumenes = new Queue<JobResumirVideo>(COLA_RESUMENES, { connection: conexion });
 
 /** Para /salud/detalle. */
 export const pingRedis = () => conTiempoLimite(conexion.ping(), 3_000);
@@ -98,5 +100,23 @@ async function encolarExportacionSinLimite(videoId: string): Promise<void> {
     "exportar-video",
     { videoId },
     { jobId, attempts: 2, backoff: { type: "exponential", delay: 30_000 }, removeOnComplete: 100, removeOnFail: 100 },
+  );
+}
+
+/** Resumen con IA de la transcripción. Un solo job por video a la vez. */
+export function encolarResumen(videoId: string): Promise<void> {
+  return conTiempoLimite(encolarResumenSinLimite(videoId), 8_000, MENSAJE_COLA);
+}
+
+async function encolarResumenSinLimite(videoId: string): Promise<void> {
+  const jobId = `resumen-${videoId}`;
+  // Para poder regenerarlo: un job terminado o fallido con el mismo id bloquearía el add().
+  const previo = await colaResumenes.getJob(jobId);
+  if (previo && ((await previo.isFailed()) || (await previo.isCompleted()))) await previo.remove();
+
+  await colaResumenes.add(
+    "resumir-video",
+    { videoId },
+    { jobId, attempts: 3, backoff: { type: "exponential", delay: 20_000 }, removeOnComplete: 100, removeOnFail: 100 },
   );
 }

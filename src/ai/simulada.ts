@@ -43,3 +43,22 @@ export async function traducirSimulado(texto: string, idiomaDestino: string): Pr
   quizasFallar("traducción");
   return `[${nombreIdioma(idiomaDestino)}] ${texto}`;
 }
+
+/** Resumen de prueba con el mismo formato que el real (## secciones y viñetas). */
+export async function resumirSimulado(lineas: string[], idioma: string): Promise<string> {
+  await esperar(azar(1500, 3000));
+  quizasFallar("resumen");
+  const marca = (l: string) => /^\[([\d:]+)\]/.exec(l)?.[1] ?? "00:00";
+  const sinMarca = (l: string) => l.replace(/^\[[\d:]+\]\s*/, "");
+  const elegidas = lineas.filter((_, i) => i % Math.max(1, Math.floor(lineas.length / 4)) === 0).slice(0, 4);
+  return [
+    `## Resumen (${nombreIdioma(idioma)}, simulado)`,
+    `Este es un resumen de prueba generado sin IA a partir de ${lineas.length} fragmento(s) de la transcripción.`,
+    "",
+    "## Puntos clave",
+    ...elegidas.map((l) => `- ${sinMarca(l).slice(0, 120)}`),
+    "",
+    "## Momentos destacados",
+    ...elegidas.map((l) => `- [${marca(l)}] ${sinMarca(l).slice(0, 80)}`),
+  ].join("\n");
+}

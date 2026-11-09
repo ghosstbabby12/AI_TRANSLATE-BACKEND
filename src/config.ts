@@ -54,6 +54,9 @@ const esquema = z.object({
   MAX_INTENTOS_SEGMENTO: z.coerce.number().min(1).default(4),
   MAX_CHARS_SEGMENTO: z.coerce.number().default(2000),
   MAX_CHARS_CONTEXTO: z.coerce.number().default(600),
+  // Transcripciones más largas se resumen por partes (el plan gratuito de Groq
+  // limita los tokens por minuto; ~16 000 caracteres son ~4 000 tokens).
+  MAX_CHARS_RESUMEN: z.coerce.number().min(2000).default(16000),
   // true = la API también consume las colas (plan gratuito de Render, sin workers)
   WORKER_EN_API: z
     .string()

@@ -1,22 +1,25 @@
 import { Worker } from "bullmq";
 import { config } from "./config.js";
 import { pool } from "./db/pool.js";
-import type { JobExportarVideo, JobProcesarVideo, JobReintentarSegmento } from "./models/types.js";
+import type { JobExportarVideo, JobProcesarVideo, JobReintentarSegmento, JobResumirVideo } from "./models/types.js";
 import { recalcularEstadoVideo } from "./pipeline/estadoVideo.js";
 import { procesarSegmento } from "./pipeline/procesarSegmento.js";
 import { exportarVideo } from "./pipeline/exportarVideo.js";
 import { completarMiniaturas } from "./pipeline/miniatura.js";
 import { procesarVideo } from "./pipeline/procesarVideo.js";
+import { resumirVideo } from "./pipeline/resumirVideo.js";
 import {
   COLA_EXPORTACIONES,
+  COLA_RESUMENES,
   COLA_SEGMENTOS,
   COLA_VIDEOS,
   crearConexionRedis,
   encolarExportacion,
+  encolarResumen,
   encolarVideo,
 } from "./queue/colas.js";
 import { obtenerSegmento } from "./repositories/segmentos.repo.js";
-import { actualizarEstadoVideo, actualizarExportacion, obtenerVideo } from "./repositories/videos.repo.js";
+import { actualizarEstadoVideo, actualizarExportacion, actualizarResumen, obtenerVideo } from "./repositories/videos.repo.js";
 import { describirError, logLimitado, reintentarHastaLograr } from "./util/resiliencia.js";
 
 /**
@@ -83,10 +86,32 @@ export async function iniciarWorkers(): Promise<() => Promise<void>> {
     );
   });
 
+  // Resúmenes: una llamada (o unas pocas) al modelo de texto; de a uno para no
+  // agotar el límite por minuto del plan gratuito de Groq.
+  const workerResumenes = new Worker<JobResumirVideo>(
+    COLA_RESUMENES,
+    async (job) => {
+      console.log(`[resumen] resumiendo ${job.data.videoId} (intento ${job.attemptsMade + 1})`);
+      await resumirVideo(job.data.videoId);
+      console.log(`[resumen] ${job.data.videoId} listo`);
+    },
+    { connection: crearConexionRedis(), concurrency: 1, lockDuration: 3 * 60_000 },
+  );
+  workerResumenes.on("failed", async (job, err) => {
+    if (!job) return;
+    const ultimo = err.name === "UnrecoverableError" || job.attemptsMade >= (job.opts.attempts ?? 1);
+    console.error(`[resumen] ${job.data.videoId} falló${ultimo ? " definitivamente" : ""}: ${err.message}`);
+    if (!ultimo) return;
+    await actualizarResumen(job.data.videoId, { estado: "error", error: err.message }).catch((e) =>
+      console.error(`[resumen] no se pudo marcar el error de ${job.data.videoId}: ${describirError(e)}`),
+    );
+  });
+
   // Redis caído: los workers reconectan solos; solo se registra (sin inundar los logs).
   workerVideos.on("error", logLimitado("worker videos"));
   workerSegmentos.on("error", logLimitado("worker segmentos"));
   workerExportaciones.on("error", logLimitado("worker exportaciones"));
+  workerResumenes.on("error", logLimitado("worker resumenes"));
 
   // En segundo plano y con reintentos: si la base o Redis aún no responden,
   // el arranque no se bloquea ni se cae.
@@ -100,11 +125,11 @@ export async function iniciarWorkers(): Promise<() => Promise<void>> {
   }, 2 * 60_000);
   void completarMiniaturas().catch(logLimitado("miniaturas"));
   barrido.unref();
-  console.log("Worker escuchando colas:", COLA_VIDEOS, COLA_SEGMENTOS);
+  console.log("Worker escuchando colas:", COLA_VIDEOS, COLA_SEGMENTOS, COLA_EXPORTACIONES, COLA_RESUMENES);
 
   return async () => {
     clearInterval(barrido);
-    await Promise.all([workerVideos.close(), workerSegmentos.close(), workerExportaciones.close()]);
+    await Promise.all([workerVideos.close(), workerSegmentos.close(), workerExportaciones.close(), workerResumenes.close()]);
   };
 }
 
@@ -125,4 +150,8 @@ async function recuperarTrabajos(): Promise<void> {
   // Lo mismo para las exportaciones que quedaron a medias
   const exportaciones = await pool.query<{ id: string }>("SELECT id FROM videos WHERE export_estado = 'procesando'");
   for (const { id } of exportaciones.rows) await encolarExportacion(id);
+
+  // Y los resúmenes
+  const resumenes = await pool.query<{ id: string }>("SELECT id FROM videos WHERE resumen_estado = 'procesando'");
+  for (const { id } of resumenes.rows) await encolarResumen(id);
 }

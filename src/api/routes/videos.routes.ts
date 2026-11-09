@@ -7,7 +7,7 @@ import multer from "multer";
 import { z } from "zod";
 import { config } from "../../config.js";
 import { CODIGOS_IDIOMA } from "../../idiomas.js";
-import { encolarExportacion, encolarReintentoSegmento, encolarVideo } from "../../queue/colas.js";
+import { encolarExportacion, encolarReintentoSegmento, encolarResumen, encolarVideo } from "../../queue/colas.js";
 import {
   listarSegmentos,
   listarSegmentosListos,
@@ -17,6 +17,7 @@ import {
 import {
   actualizarEstadoVideo,
   actualizarExportacion,
+  actualizarResumen,
   contarUsosDeArchivo,
   crearTraduccion,
   eliminarVideo,
@@ -27,7 +28,7 @@ import {
   obtenerVideoDeUsuario,
 } from "../../repositories/videos.repo.js";
 import { borrarObjeto, borrarPrefijo, claves, subirArchivo, urlFirmada } from "../../storage/s3.js";
-import { aSrt, aTxt, aVtt, generarCues } from "../../subtitulos/formatos.js";
+import { aSrt, aTxt, aTxtResumen, aVtt, generarCues } from "../../subtitulos/formatos.js";
 import type { Video } from "../../models/types.js";
 import { describirError } from "../../util/resiliencia.js";
 import { requiereUsuario } from "../middleware/usuario.js";
@@ -70,9 +71,9 @@ function nombreOriginal(nombre: string): string {
 }
 
 /** Nombre de archivo seguro para descargas: "<nombre>.<idioma>.<ext>". */
-function nombreDescarga(video: Video, extension: string): string {
+function nombreDescarga(video: Video, extension: string, sufijo = ""): string {
   const base = path.parse(video.nombre).name.replace(/[^\w.-]+/g, "_").slice(0, 80) || "video";
-  return `${base}.${video.idioma_destino}.${extension}`;
+  return `${base}${sufijo}.${video.idioma_destino}.${extension}`;
 }
 
 /** Busca el video del usuario o responde 404. */
@@ -330,6 +331,49 @@ videosRouter.post("/:id/exportar", async (req, res) => {
 });
 
 /**
+ * POST /videos/:id/resumen — pide (o regenera) el resumen con IA de la
+ * transcripción, en el idioma de la traducción. Trabajo en segundo plano: la
+ * app consulta GET /videos/:id hasta que `resumen_estado` sea "listo".
+ */
+videosRouter.post("/:id/resumen", async (req, res) => {
+  const video = await videoDelUsuario(req, res);
+  if (!video) return;
+  if (video.estado === "pendiente" || video.estado === "procesando") {
+    res.status(409).json({ error: "Espera a que termine la traducción para resumirla." });
+    return;
+  }
+  if ((await listarSegmentosListos(video.id)).length === 0) {
+    res.status(409).json({ error: "Todavía no hay transcripción para resumir." });
+    return;
+  }
+  if (video.resumen_estado !== "procesando") {
+    await actualizarResumen(video.id, { estado: "procesando" });
+    try {
+      await encolarResumen(video.id);
+    } catch (err) {
+      // Queda "procesando": el barrido periódico de los workers lo retomará.
+      console.warn(`[resumen] ${video.id} sin encolar por ahora: ${describirError(err)}`);
+    }
+  }
+  res.status(202).json({ resumen_estado: "procesando" });
+});
+
+/** GET /videos/:id/resumen?descargar=1 — el resumen en texto plano (.txt). */
+videosRouter.get("/:id/resumen", async (req, res) => {
+  const video = await videoDelUsuario(req, res);
+  if (!video) return;
+  if (!video.resumen_texto) {
+    res.status(404).json({ error: "Este video todavía no tiene resumen." });
+    return;
+  }
+  const { descargar } = esquemaFormato.parse(req.query);
+  const idiomas = `${(video.idioma_origen ?? "?").toUpperCase()} → ${video.idioma_destino.toUpperCase()}`;
+  res.type("text/plain").set("Cache-Control", "no-store");
+  if (descargar === "1") res.attachment(nombreDescarga(video, "txt", "-resumen"));
+  res.send(aTxtResumen(video.resumen_texto, { titulo: video.nombre, idiomas }));
+});
+
+/**
  * POST /videos/:id/reintentar — vuelve a encolar los segmentos que quedaron en
  * error o, si el video falló antes de dividirse (p. ej. la descarga), el video entero.
  */
@@ -351,6 +395,8 @@ videosRouter.post("/:id/reintentar", async (req, res) => {
     await actualizarEstadoVideo(video.id, "procesando");
     // Los subtítulos van a cambiar: el video exportado quedaría desactualizado.
     if (video.export_estado) await actualizarExportacion(video.id, { estado: null });
+    // El resumen también: se descarta para que se genere con la transcripción completa.
+    if (video.resumen_estado) await actualizarResumen(video.id, { estado: null, texto: null });
     await Promise.all(ids.map((id) => encolarReintentoSegmento(id, 0)));
   }
   res.json({ reencolados: ids.length });
