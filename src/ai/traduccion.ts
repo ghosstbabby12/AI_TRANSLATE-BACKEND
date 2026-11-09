@@ -1,13 +1,9 @@
-import Anthropic from "@anthropic-ai/sdk";
 import { config } from "../config.js";
+import { anthropic, opcionesClaude } from "./claude.js";
 import { nombreIdioma } from "../idiomas.js";
 import { ErrorIA } from "./errores.js";
 import { groq } from "./groq.js";
 import { traducirSimulado } from "./simulada.js";
-
-let cliente: Anthropic | undefined;
-const anthropic = () =>
-  (cliente ??= new Anthropic({ apiKey: config.ANTHROPIC_API_KEY, timeout: 60_000, maxRetries: 2 }));
 
 // Fijo para todos los videos (el idioma va en el mensaje de usuario).
 const SISTEMA = `Eres un traductor profesional de subtítulos.
@@ -55,7 +51,6 @@ function armarMensaje({ texto, idiomaDestino, anterior }: EntradaTraduccion): st
   return partes.join("\n");
 }
 
-const esHaiku = config.CLAUDE_MODEL.startsWith("claude-haiku");
 // Los gpt-oss de Groq razonan antes de responder; "low" basta para traducir.
 const esGptOss = config.GROQ_MODELO_TRADUCCION.startsWith("openai/gpt-oss");
 
@@ -82,17 +77,7 @@ async function traducirConClaude(entrada: EntradaTraduccion): Promise<string> {
     max_tokens: 2048,
     system: SISTEMA,
     messages: [{ role: "user", content: armarMensaje(entrada) }],
-    // Haiku 4.5 no acepta `effort` ni fallbacks del servidor.
-    ...(esHaiku
-      ? {}
-      : {
-          output_config: { effort: config.CLAUDE_EFFORT },
-          // Si el clasificador de seguridad rechaza un fragmento (falso positivo
-          // con, p. ej., un documental de ciberseguridad), el servidor lo
-          // reintenta en el modelo de respaldo recomendado en la misma llamada.
-          betas: ["server-side-fallback-2026-07-01"],
-          fallbacks: "default" as const,
-        }),
+    ...opcionesClaude(),
   });
 
   if (respuesta.stop_reason === "refusal") {
