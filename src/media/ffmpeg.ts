@@ -159,3 +159,63 @@ export async function procesarFotoPerfil(entrada: string, salida: string): Promi
     salida,
   ]);
 }
+
+/**
+ * Acelera un audio (sin cambiar el tono) para que quepa en su tramo del video.
+ * Entrada y salida: PCM 16 bits mono crudo a la misma frecuencia.
+ */
+export function acelerarPcm(datos: Buffer, frecuencia: number, factor: number): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const formato = ["-f", "s16le", "-ar", String(frecuencia), "-ac", "1"];
+    const proc = spawn(config.FFMPEG_PATH, [
+      "-hide_banner", "-loglevel", "error",
+      ...formato, "-i", "pipe:0",
+      "-filter:a", `atempo=${factor.toFixed(3)}`,
+      ...formato, "pipe:1",
+    ]);
+    const trozos: Buffer[] = [];
+    let stderr = "";
+    proc.stdout.on("data", (d: Buffer) => trozos.push(d));
+    proc.stderr.on("data", (d) => (stderr += d));
+    proc.on("error", reject);
+    proc.on("close", (code) =>
+      code === 0 ? resolve(Buffer.concat(trozos)) : reject(new Error(`ffmpeg (atempo) terminó con código ${code}: ${stderr.slice(-400)}`)),
+    );
+    proc.stdin.on("error", () => {});
+    proc.stdin.end(datos);
+  });
+}
+
+/**
+ * Codificador de MP3 que recibe PCM crudo por partes: la pista se arma por
+ * streaming, sin tener una hora de audio completa en memoria.
+ */
+export function codificadorMp3(frecuencia: number, salida: string) {
+  const proc = spawn(config.FFMPEG_PATH, [
+    "-hide_banner", "-loglevel", "error", "-y",
+    "-f", "s16le", "-ar", String(frecuencia), "-ac", "1", "-i", "pipe:0",
+    "-c:a", "libmp3lame", "-b:a", "64k",
+    salida,
+  ]);
+  let stderr = "";
+  proc.stderr.on("data", (d) => (stderr += d));
+  const terminado = new Promise<void>((resolve, reject) => {
+    proc.on("error", reject);
+    proc.on("close", (code) =>
+      code === 0 ? resolve() : reject(new Error(`ffmpeg (mp3) terminó con código ${code}: ${stderr.slice(-400)}`)),
+    );
+  });
+  terminado.catch(() => {}); // se espera en cerrar()
+  return {
+    /** Escribe respetando la contrapresión del proceso. */
+    escribir: (datos: Buffer) =>
+      new Promise<void>((resolve, reject) => {
+        if (datos.length === 0) return resolve();
+        proc.stdin.write(datos, (err) => (err ? reject(err) : resolve()));
+      }),
+    cerrar: async () => {
+      proc.stdin.end();
+      await terminado;
+    },
+  };
+}

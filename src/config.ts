@@ -68,6 +68,9 @@ const esquema = z.object({
   FFMPEG_PATH: z.string().default("ffmpeg"),
   FFPROBE_PATH: z.string().default("ffprobe"),
   YTDLP_PATH: z.string().default("yt-dlp"),
+  // Voz sintética (audio de la traducción). Las voces se descargan aquí al primer uso.
+  PIPER_PATH: z.string().default("/opt/piper/piper"),
+  VOCES_DIR: z.string().default("/tmp/voces-piper"),
 }).superRefine((c, ctx) => {
   if (c.IA_MODO !== "real") return;
   // Solo se exigen las claves de los proveedores elegidos.
