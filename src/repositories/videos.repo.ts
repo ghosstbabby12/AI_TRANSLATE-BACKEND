@@ -95,6 +95,17 @@ export async function actualizarExportacion(
   );
 }
 
+/** Estado del audio de la traducción (ver pipeline/generarAudio.ts). */
+export async function actualizarAudio(
+  id: string,
+  datos: { estado: EstadoExportacion | null; key?: string | null; error?: string | null },
+): Promise<void> {
+  await pool.query(
+    "UPDATE videos SET audio_estado = $2, audio_key = $3, audio_error = $4, actualizado_en = now() WHERE id = $1",
+    [id, datos.estado, datos.key ?? null, datos.error?.slice(0, 1000) ?? null],
+  );
+}
+
 /**
  * Estado del resumen con IA (ver pipeline/resumirVideo.ts). Si no se pasa
  * `texto`, se conserva el que hubiera: al regenerar, o si la regeneración

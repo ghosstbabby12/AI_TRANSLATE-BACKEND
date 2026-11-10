@@ -7,7 +7,8 @@ import multer from "multer";
 import { z } from "zod";
 import { config } from "../../config.js";
 import { CODIGOS_IDIOMA } from "../../idiomas.js";
-import { encolarExportacion, encolarReintentoSegmento, encolarResumen, encolarVideo } from "../../queue/colas.js";
+import { encolarAudio, encolarExportacion, encolarReintentoSegmento, encolarResumen, encolarVideo } from "../../queue/colas.js";
+import { vozDisponible } from "../../media/voz.js";
 import {
   listarSegmentos,
   listarSegmentosListos,
@@ -15,6 +16,7 @@ import {
   reiniciarSegmentosConError,
 } from "../../repositories/segmentos.repo.js";
 import {
+  actualizarAudio,
   actualizarEstadoVideo,
   actualizarExportacion,
   actualizarResumen,
@@ -154,6 +156,13 @@ videosRouter.get("/:id", async (req, res) => {
       video.export_estado === "listo" && video.export_key
         ? await urlFirmada(video.export_key, 3600, nombreDescarga(video, "mp4"))
         : null,
+    // Audio de la traducción: una URL para escucharlo y otra que lo descarga con nombre propio
+    voz_disponible: vozDisponible(video.idioma_destino),
+    url_audio: video.audio_estado === "listo" && video.audio_key ? await urlFirmada(video.audio_key) : null,
+    url_audio_descarga:
+      video.audio_estado === "listo" && video.audio_key
+        ? await urlFirmada(video.audio_key, 3600, nombreDescarga(video, "mp3", "-audio"))
+        : null,
   });
 });
 
@@ -184,6 +193,7 @@ videosRouter.delete("/:id", async (req, res) => {
   void (async () => {
     try {
       if (video.export_key) await borrarObjeto(video.export_key);
+      if (video.audio_key) await borrarObjeto(video.audio_key);
       if (video.storage_key && (await contarUsosDeArchivo(video.storage_key)) === 0) {
         // Original, trozos de audio y exportación viven bajo la carpeta del video que se subió
         const carpeta = video.storage_key.slice(0, video.storage_key.lastIndexOf("/") + 1);
@@ -374,6 +384,38 @@ videosRouter.get("/:id/resumen", async (req, res) => {
 });
 
 /**
+ * POST /videos/:id/audio — pide el audio de la traducción (voz sintética
+ * alineada con el video). Trabajo en segundo plano: la app consulta
+ * GET /videos/:id hasta que `audio_estado` sea "listo" y trae `url_audio`.
+ */
+videosRouter.post("/:id/audio", async (req, res) => {
+  const video = await videoDelUsuario(req, res);
+  if (!video) return;
+  if (!vozDisponible(video.idioma_destino)) {
+    res.status(409).json({ error: "Todavía no hay voz sintética para este idioma." });
+    return;
+  }
+  if (video.estado === "pendiente" || video.estado === "procesando") {
+    res.status(409).json({ error: "Espera a que termine la traducción para generar el audio." });
+    return;
+  }
+  if ((await listarSegmentosListos(video.id)).length === 0) {
+    res.status(409).json({ error: "Todavía no hay traducción para narrar." });
+    return;
+  }
+  if (video.audio_estado !== "procesando") {
+    await actualizarAudio(video.id, { estado: "procesando", key: video.audio_key });
+    try {
+      await encolarAudio(video.id);
+    } catch (err) {
+      // Queda "procesando": el barrido periódico de los workers lo retomará.
+      console.warn(`[audio] ${video.id} sin encolar por ahora: ${describirError(err)}`);
+    }
+  }
+  res.status(202).json({ audio_estado: "procesando" });
+});
+
+/**
  * POST /videos/:id/reintentar — vuelve a encolar los segmentos que quedaron en
  * error o, si el video falló antes de dividirse (p. ej. la descarga), el video entero.
  */
@@ -397,6 +439,7 @@ videosRouter.post("/:id/reintentar", async (req, res) => {
     if (video.export_estado) await actualizarExportacion(video.id, { estado: null });
     // El resumen también: se descarta para que se genere con la transcripción completa.
     if (video.resumen_estado) await actualizarResumen(video.id, { estado: null, texto: null });
+    if (video.audio_estado) await actualizarAudio(video.id, { estado: null, key: video.audio_key });
     await Promise.all(ids.map((id) => encolarReintentoSegmento(id, 0)));
   }
   res.json({ reencolados: ids.length });

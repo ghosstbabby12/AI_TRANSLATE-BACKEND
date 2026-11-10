@@ -24,6 +24,9 @@ export interface Video {
   resumen_texto: string | null;
   resumen_error: string | null;
   resumen_en: Date | null;
+  audio_estado: EstadoExportacion | null;
+  audio_key: string | null;
+  audio_error: string | null;
   creado_en: Date;
   actualizado_en: Date;
 }
@@ -65,5 +68,9 @@ export interface JobExportarVideo {
 }
 
 export interface JobResumirVideo {
+  videoId: string;
+}
+
+export interface JobAudioVideo {
   videoId: string;
 }

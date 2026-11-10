@@ -1,7 +1,7 @@
 import { Queue } from "bullmq";
 import { Redis } from "ioredis";
 import { config } from "../config.js";
-import type { JobExportarVideo, JobProcesarVideo, JobReintentarSegmento, JobResumirVideo } from "../models/types.js";
+import type { JobAudioVideo, JobExportarVideo, JobProcesarVideo, JobReintentarSegmento, JobResumirVideo } from "../models/types.js";
 import { conTiempoLimite, logLimitado } from "../util/resiliencia.js";
 
 // Workers: BullMQ exige maxRetriesPerRequest: null; esperan y reconectan solos.
@@ -32,6 +32,7 @@ export const COLA_VIDEOS = "videos";
 export const COLA_SEGMENTOS = "segmentos";
 export const COLA_EXPORTACIONES = "exportaciones";
 export const COLA_RESUMENES = "resumenes";
+export const COLA_AUDIOS = "audios";
 
 const conexion = crearConexionRedisRapida();
 
@@ -39,6 +40,7 @@ export const colaVideos = new Queue<JobProcesarVideo>(COLA_VIDEOS, { connection:
 export const colaSegmentos = new Queue<JobReintentarSegmento>(COLA_SEGMENTOS, { connection: conexion });
 export const colaExportaciones = new Queue<JobExportarVideo>(COLA_EXPORTACIONES, { connection: conexion });
 export const colaResumenes = new Queue<JobResumirVideo>(COLA_RESUMENES, { connection: conexion });
+export const colaAudios = new Queue<JobAudioVideo>(COLA_AUDIOS, { connection: conexion });
 
 /** Para /salud/detalle. */
 export const pingRedis = () => conTiempoLimite(conexion.ping(), 3_000);
@@ -118,5 +120,22 @@ async function encolarResumenSinLimite(videoId: string): Promise<void> {
     "resumir-video",
     { videoId },
     { jobId, attempts: 3, backoff: { type: "exponential", delay: 20_000 }, removeOnComplete: 100, removeOnFail: 100 },
+  );
+}
+
+/** Audio de la traducción con voz sintética. Un solo job por video a la vez. */
+export function encolarAudio(videoId: string): Promise<void> {
+  return conTiempoLimite(encolarAudioSinLimite(videoId), 8_000, MENSAJE_COLA);
+}
+
+async function encolarAudioSinLimite(videoId: string): Promise<void> {
+  const jobId = `audio-${videoId}`;
+  const previo = await colaAudios.getJob(jobId);
+  if (previo && ((await previo.isFailed()) || (await previo.isCompleted()))) await previo.remove();
+
+  await colaAudios.add(
+    "generar-audio",
+    { videoId },
+    { jobId, attempts: 2, backoff: { type: "exponential", delay: 30_000 }, removeOnComplete: 100, removeOnFail: 100 },
   );
 }

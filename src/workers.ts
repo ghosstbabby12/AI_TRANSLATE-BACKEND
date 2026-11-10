@@ -1,25 +1,34 @@
 import { Worker } from "bullmq";
 import { config } from "./config.js";
 import { pool } from "./db/pool.js";
-import type { JobExportarVideo, JobProcesarVideo, JobReintentarSegmento, JobResumirVideo } from "./models/types.js";
+import type { JobAudioVideo, JobExportarVideo, JobProcesarVideo, JobReintentarSegmento, JobResumirVideo } from "./models/types.js";
 import { recalcularEstadoVideo } from "./pipeline/estadoVideo.js";
 import { procesarSegmento } from "./pipeline/procesarSegmento.js";
 import { exportarVideo } from "./pipeline/exportarVideo.js";
+import { generarAudio } from "./pipeline/generarAudio.js";
 import { completarMiniaturas } from "./pipeline/miniatura.js";
 import { procesarVideo } from "./pipeline/procesarVideo.js";
 import { resumirVideo } from "./pipeline/resumirVideo.js";
 import {
+  COLA_AUDIOS,
   COLA_EXPORTACIONES,
   COLA_RESUMENES,
   COLA_SEGMENTOS,
   COLA_VIDEOS,
   crearConexionRedis,
+  encolarAudio,
   encolarExportacion,
   encolarResumen,
   encolarVideo,
 } from "./queue/colas.js";
 import { obtenerSegmento } from "./repositories/segmentos.repo.js";
-import { actualizarEstadoVideo, actualizarExportacion, actualizarResumen, obtenerVideo } from "./repositories/videos.repo.js";
+import {
+  actualizarAudio,
+  actualizarEstadoVideo,
+  actualizarExportacion,
+  actualizarResumen,
+  obtenerVideo,
+} from "./repositories/videos.repo.js";
 import { describirError, logLimitado, reintentarHastaLograr } from "./util/resiliencia.js";
 
 /**
@@ -107,11 +116,32 @@ export async function iniciarWorkers(): Promise<() => Promise<void>> {
     );
   });
 
+  // Audio de la traducción: sintetizar voz usa bastante CPU y memoria, de a uno.
+  const workerAudios = new Worker<JobAudioVideo>(
+    COLA_AUDIOS,
+    async (job) => {
+      console.log(`[audio] generando audio de ${job.data.videoId}`);
+      await generarAudio(job.data.videoId);
+      console.log(`[audio] ${job.data.videoId} listo`);
+    },
+    { connection: crearConexionRedis(), concurrency: 1, lockDuration: 5 * 60_000 },
+  );
+  workerAudios.on("failed", async (job, err) => {
+    if (!job) return;
+    const ultimo = err.name === "UnrecoverableError" || job.attemptsMade >= (job.opts.attempts ?? 1);
+    console.error(`[audio] ${job.data.videoId} falló${ultimo ? " definitivamente" : ""}: ${err.message}`);
+    if (!ultimo) return;
+    await actualizarAudio(job.data.videoId, { estado: "error", error: err.message }).catch((e) =>
+      console.error(`[audio] no se pudo marcar el error de ${job.data.videoId}: ${describirError(e)}`),
+    );
+  });
+
   // Redis caído: los workers reconectan solos; solo se registra (sin inundar los logs).
   workerVideos.on("error", logLimitado("worker videos"));
   workerSegmentos.on("error", logLimitado("worker segmentos"));
   workerExportaciones.on("error", logLimitado("worker exportaciones"));
   workerResumenes.on("error", logLimitado("worker resumenes"));
+  workerAudios.on("error", logLimitado("worker audios"));
 
   // En segundo plano y con reintentos: si la base o Redis aún no responden,
   // el arranque no se bloquea ni se cae.
@@ -125,11 +155,11 @@ export async function iniciarWorkers(): Promise<() => Promise<void>> {
   }, 2 * 60_000);
   void completarMiniaturas().catch(logLimitado("miniaturas"));
   barrido.unref();
-  console.log("Worker escuchando colas:", COLA_VIDEOS, COLA_SEGMENTOS, COLA_EXPORTACIONES, COLA_RESUMENES);
+  console.log("Worker escuchando colas:", COLA_VIDEOS, COLA_SEGMENTOS, COLA_EXPORTACIONES, COLA_RESUMENES, COLA_AUDIOS);
 
   return async () => {
     clearInterval(barrido);
-    await Promise.all([workerVideos.close(), workerSegmentos.close(), workerExportaciones.close(), workerResumenes.close()]);
+    await Promise.all([workerVideos.close(), workerSegmentos.close(), workerExportaciones.close(), workerResumenes.close(), workerAudios.close()]);
   };
 }
 
@@ -154,4 +184,8 @@ async function recuperarTrabajos(): Promise<void> {
   // Y los resúmenes
   const resumenes = await pool.query<{ id: string }>("SELECT id FROM videos WHERE resumen_estado = 'procesando'");
   for (const { id } of resumenes.rows) await encolarResumen(id);
+
+  // Y los audios
+  const audios = await pool.query<{ id: string }>("SELECT id FROM videos WHERE audio_estado = 'procesando'");
+  for (const { id } of audios.rows) await encolarAudio(id);
 }

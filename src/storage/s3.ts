@@ -28,6 +28,7 @@ const s3Publico = config.S3_PUBLIC_ENDPOINT
 export const claves = {
   videoOriginal: (videoId: string, ext: string) => `videos/${videoId}/original${ext}`,
   videoSubtitulado: (videoId: string) => `videos/${videoId}/subtitulado.mp4`,
+  audioTraduccion: (videoId: string) => `videos/${videoId}/audio-traduccion.mp3`,
   /** En la carpeta del original: así la comparten todas sus traducciones. */
   miniatura: (storageKey: string) => `${storageKey.slice(0, storageKey.lastIndexOf("/") + 1)}miniatura.jpg`,
   audioSegmento: (videoId: string, indice: number) =>
