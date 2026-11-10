@@ -11,15 +11,20 @@ import { config } from "../config.js";
  * Voz sintética con Piper (https://github.com/rhasspy/piper): libre, sin
  * clave ni costo, corre en la CPU del servidor. Una voz por idioma destino;
  * Piper no tiene voces en japonés ni coreano.
+ *
+ * Se usan las voces más livianas ("x_low"/"low"): una "medium" o "high" pasa
+ * de 400 MB al sintetizar y, junto con la API, no cabe en los 512 MB del plan
+ * gratuito de Render (el proceso muere por falta de memoria). Con más memoria
+ * se pueden cambiar por otras de https://huggingface.co/rhasspy/piper-voices.
  */
 const VOCES: Record<string, string> = {
-  es: "es_MX-claude-high",
-  en: "en_US-lessac-medium",
-  pt: "pt_BR-faber-medium",
-  fr: "fr_FR-siwis-medium",
-  de: "de_DE-thorsten-medium",
-  it: "it_IT-paola-medium",
-  zh: "zh_CN-huayan-medium",
+  es: "es_ES-carlfm-x_low",
+  en: "en_US-lessac-low",
+  pt: "pt_BR-edresson-low",
+  fr: "fr_FR-siwis-low",
+  de: "de_DE-eva_k-x_low",
+  it: "it_IT-riccardo-x_low",
+  zh: "zh_CN-huayan-x_low",
 };
 
 export const vozDisponible = (idioma: string) => idioma in VOCES;
@@ -78,34 +83,99 @@ function asegurarVoz(idioma: string): Promise<string> {
   return tarea;
 }
 
-/**
- * Sintetiza varios textos con un solo proceso de Piper (el modelo se carga una
- * vez): con --json-input cada línea indica su texto y su archivo de salida.
- * Devuelve las rutas de los WAV, en el mismo orden.
- */
-export async function sintetizar(textos: string[], idioma: string, dir: string): Promise<string[]> {
-  const modelo = await asegurarVoz(idioma);
-  const salidas = textos.map((_, i) => path.join(dir, `voz-${String(i).padStart(5, "0")}.wav`));
-  const entrada = textos.map((text, i) => JSON.stringify({ text, output_file: salidas[i] })).join("\n") + "\n";
+// La memoria de Piper crece con el largo de cada frase y con las que lleva
+// sintetizadas: frases cortas y un proceso nuevo cada pocas frases la mantienen baja.
+const LARGO_FRASE = 160;
+const FRASES_POR_PROCESO = 8;
+// Un lote de 8 frases tarda segundos; si pasa de esto, Piper se colgó.
+const TIEMPO_MAXIMO_LOTE_MS = 10 * 60_000;
 
-  await new Promise<void>((resolve, reject) => {
+/** Parte un texto en frases de hasta LARGO_FRASE caracteres (por puntuación y, si no alcanza, por palabras). */
+export function fragmentar(texto: string): string[] {
+  const limpio = texto.replace(/\s+/g, " ").trim();
+  if (!limpio) return [];
+  const piezas: string[] = [];
+  for (const oracion of limpio.split(/(?<=[.!?…。！？;；])\s*/)) {
+    let resto = oracion.trim();
+    while (resto.length > LARGO_FRASE) {
+      const ventana = resto.slice(0, LARGO_FRASE);
+      // Mejor en una coma; si no, en el último espacio; si no hay (chino), donde toque
+      let corte = Math.max(ventana.lastIndexOf(", "), ventana.lastIndexOf("，"), ventana.lastIndexOf("、"));
+      if (corte < LARGO_FRASE / 3) corte = ventana.lastIndexOf(" ");
+      if (corte < LARGO_FRASE / 3) corte = LARGO_FRASE - 1;
+      piezas.push(resto.slice(0, corte + 1).trim());
+      resto = resto.slice(corte + 1).trim();
+    }
+    if (resto) piezas.push(resto);
+  }
+  return piezas;
+}
+
+/** Corre un proceso de Piper que sintetiza un lote de frases; avisa cada frase terminada. */
+function correrPiper(modelo: string, lote: { text: string; output_file: string }[], alTerminarFrase: () => void) {
+  return new Promise<void>((resolve, reject) => {
     const proc = spawn(config.PIPER_PATH, ["--model", modelo, "--json-input", "--sentence_silence", "0.15"], {
-      stdio: ["pipe", "ignore", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
     });
+    const limite = setTimeout(() => proc.kill("SIGKILL"), TIEMPO_MAXIMO_LOTE_MS);
     let stderr = "";
+    let pendiente = "";
     proc.stderr.on("data", (d) => (stderr = (stderr + d).slice(-2000)));
-    proc.on("error", reject);
-    proc.on("close", (code, senal) =>
-      code === 0
-        ? resolve()
-        : reject(new Error(`piper terminó ${code === null ? `por la señal ${senal}` : `con código ${code}`}: ${stderr.trim().slice(-600)}`)),
-    );
+    // Piper escribe en stdout la ruta de cada WAV al terminarlo
+    proc.stdout.on("data", (d) => {
+      const lineas = (pendiente + d).split("\n");
+      pendiente = lineas.pop() ?? "";
+      for (const l of lineas) if (l.trim()) alTerminarFrase();
+    });
+    proc.on("error", (e) => {
+      clearTimeout(limite);
+      reject(e);
+    });
+    proc.on("close", (code, senal) => {
+      clearTimeout(limite);
+      if (code === 0) resolve();
+      else
+        reject(
+          new Error(
+            `piper terminó ${code === null ? `por la señal ${senal}` : `con código ${code}`}: ${stderr.trim().slice(-600)}`,
+          ),
+        );
+    });
     proc.stdin.on("error", () => {}); // si piper muere, el error llega por "close"
-    proc.stdin.end(entrada);
+    proc.stdin.end(lote.map((l) => JSON.stringify(l)).join("\n") + "\n");
+  });
+}
+
+/**
+ * Sintetiza varios textos. Cada uno se parte en frases cortas que se
+ * sintetizan en lotes (un proceso de Piper por lote). Devuelve, por cada
+ * texto, las rutas de los WAV de sus frases en orden (vacío si no tenía texto).
+ * `alAvanzar` recibe la fracción terminada (0 a 1).
+ */
+export async function sintetizar(
+  textos: string[],
+  idioma: string,
+  dir: string,
+  alAvanzar?: (fraccion: number) => void,
+): Promise<string[][]> {
+  const modelo = await asegurarVoz(idioma);
+  const porTexto: string[][] = textos.map(() => []);
+  const frases: { text: string; output_file: string }[] = [];
+  textos.forEach((texto, i) => {
+    for (const text of fragmentar(texto)) {
+      const output_file = path.join(dir, `voz-${String(frases.length).padStart(6, "0")}.wav`);
+      frases.push({ text, output_file });
+      porTexto[i]!.push(output_file);
+    }
   });
 
-  for (const s of salidas) if (!(await existe(s))) throw new Error(`piper no generó ${path.basename(s)}`);
-  return salidas;
+  let hechas = 0;
+  for (let i = 0; i < frases.length; i += FRASES_POR_PROCESO) {
+    await correrPiper(modelo, frases.slice(i, i + FRASES_POR_PROCESO), () => alAvanzar?.(++hechas / frases.length));
+  }
+
+  for (const f of frases) if (!(await existe(f.output_file))) throw new Error(`piper no generó ${path.basename(f.output_file)}`);
+  return porTexto;
 }
 
 export interface Pcm {

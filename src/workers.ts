@@ -5,7 +5,7 @@ import type { JobAudioVideo, JobExportarVideo, JobProcesarVideo, JobReintentarSe
 import { recalcularEstadoVideo } from "./pipeline/estadoVideo.js";
 import { procesarSegmento } from "./pipeline/procesarSegmento.js";
 import { exportarVideo } from "./pipeline/exportarVideo.js";
-import { generarAudio } from "./pipeline/generarAudio.js";
+import { ERROR_AUDIO_INTERRUMPIDO, generarAudio } from "./pipeline/generarAudio.js";
 import { completarMiniaturas } from "./pipeline/miniatura.js";
 import { procesarVideo } from "./pipeline/procesarVideo.js";
 import { resumirVideo } from "./pipeline/resumirVideo.js";
@@ -24,6 +24,7 @@ import {
 import { obtenerSegmento } from "./repositories/segmentos.repo.js";
 import {
   actualizarAudio,
+  contarIntentoAudio,
   actualizarEstadoVideo,
   actualizarExportacion,
   actualizarResumen,
@@ -117,10 +118,19 @@ export async function iniciarWorkers(): Promise<() => Promise<void>> {
   });
 
   // Audio de la traducción: sintetizar voz usa bastante CPU y memoria, de a uno.
+  const MAX_INTENTOS_AUDIO = 3;
   const workerAudios = new Worker<JobAudioVideo>(
     COLA_AUDIOS,
     async (job) => {
-      console.log(`[audio] generando audio de ${job.data.videoId}`);
+      // Si el proceso murió a mitad (p. ej. sin memoria), el barrido lo vuelve a
+      // encolar: tras varios intentos se da por fallido en vez de quedar en bucle.
+      const intento = await contarIntentoAudio(job.data.videoId);
+      if (intento > MAX_INTENTOS_AUDIO) {
+        console.error(`[audio] ${job.data.videoId} se cortó ${intento - 1} veces; se marca como error`);
+        await actualizarAudio(job.data.videoId, { estado: "error", error: ERROR_AUDIO_INTERRUMPIDO });
+        return;
+      }
+      console.log(`[audio] generando audio de ${job.data.videoId} (intento ${intento})`);
       await generarAudio(job.data.videoId);
       console.log(`[audio] ${job.data.videoId} listo`);
     },

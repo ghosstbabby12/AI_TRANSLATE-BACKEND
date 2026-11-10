@@ -27,6 +27,8 @@ export interface Video {
   audio_estado: EstadoExportacion | null;
   audio_key: string | null;
   audio_error: string | null;
+  audio_progreso: number | null;
+  audio_intentos: number;
   creado_en: Date;
   actualizado_en: Date;
 }

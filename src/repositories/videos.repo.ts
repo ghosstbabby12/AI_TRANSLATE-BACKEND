@@ -100,10 +100,32 @@ export async function actualizarAudio(
   id: string,
   datos: { estado: EstadoExportacion | null; key?: string | null; error?: string | null },
 ): Promise<void> {
+  // Pedirlo de nuevo ("procesando") reinicia el avance y el contador de intentos
   await pool.query(
-    "UPDATE videos SET audio_estado = $2, audio_key = $3, audio_error = $4, actualizado_en = now() WHERE id = $1",
+    `UPDATE videos SET audio_estado = $2, audio_key = $3, audio_error = $4,
+       audio_progreso = CASE WHEN $2 = 'procesando' THEN 0 END,
+       audio_intentos = CASE WHEN $2 = 'procesando' THEN 0 ELSE audio_intentos END,
+       actualizado_en = now()
+     WHERE id = $1`,
     [id, datos.estado, datos.key ?? null, datos.error?.slice(0, 1000) ?? null],
   );
+}
+
+/** Avance (0-100) del audio que se está generando. */
+export async function actualizarProgresoAudio(id: string, progreso: number): Promise<void> {
+  await pool.query("UPDATE videos SET audio_progreso = $2 WHERE id = $1 AND audio_estado = 'procesando'", [
+    id,
+    Math.max(0, Math.min(100, Math.round(progreso))),
+  ]);
+}
+
+/** Cuenta un intento más de generar el audio y devuelve cuántos van. */
+export async function contarIntentoAudio(id: string): Promise<number> {
+  const { rows } = await pool.query<{ audio_intentos: number }>(
+    "UPDATE videos SET audio_intentos = audio_intentos + 1 WHERE id = $1 RETURNING audio_intentos",
+    [id],
+  );
+  return rows[0]?.audio_intentos ?? 0;
 }
 
 /**
