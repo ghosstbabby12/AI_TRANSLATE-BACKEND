@@ -1,29 +1,29 @@
-import { crearApp } from "./api/app.js";
-import { prepararBaseDeDatos } from "./arranque.js";
-import { config } from "./config.js";
-import { pool } from "./db/pool.js";
-import { describirError } from "./util/resiliencia.js";
-import { iniciarWorkers } from "./workers.js";
+import { config } from "./config/index.js";
+import { deps, useCases } from "./container.js";
+import { pool } from "./infrastructure/db/pool.js";
+import { prepareDatabase } from "./infrastructure/db/readiness.js";
+import { startWorkers } from "./infrastructure/workers/startWorkers.js";
+import { createApp } from "./presentation/http/app.js";
+import { describeError } from "./shared/resilience.js";
 
-// Un error inesperado en una promesa no debe tumbar todo el servidor.
-process.on("unhandledRejection", (err) => console.error(`[proceso] promesa rechazada sin capturar: ${describirError(err)}`));
+// An unexpected rejected promise must not bring the whole server down.
+process.on("unhandledRejection", (err) => console.error(`[process] unhandled rejection: ${describeError(err)}`));
 
-// 1. Primero se abre el puerto: /salud responde aunque la base o Redis estén caídos.
-const server = crearApp().listen(config.PORT, () => {
-  console.log(`API escuchando en http://localhost:${config.PORT}`);
+// 1. Open the port first: /salud answers even if the database or Redis are down.
+const server = createApp(useCases, deps.tokens).listen(config.port, () => {
+  console.log(`API listening on http://localhost:${config.port}`);
 });
 
-// 2. Migraciones en segundo plano, con reintentos hasta que la base responda.
-// 3. Plan gratuito de Render (sin background workers): la API también procesa,
-//    una vez que la base está lista.
-let cerrarWorkers: (() => Promise<void>) | null = null;
-void prepararBaseDeDatos().then(async () => {
-  if (config.WORKER_EN_API) cerrarWorkers = await iniciarWorkers();
+// 2. Migrations in the background, retried until the database answers.
+// 3. Render's free plan has no background workers: the API processes jobs too.
+let stopWorkers: (() => Promise<void>) | null = null;
+void prepareDatabase().then(() => {
+  if (config.workers.runInsideApi) stopWorkers = startWorkers(useCases, deps.videos);
 });
 
 process.on("SIGTERM", () => {
   server.close(async () => {
-    await cerrarWorkers?.();
+    await stopWorkers?.();
     await pool.end();
     process.exit(0);
   });

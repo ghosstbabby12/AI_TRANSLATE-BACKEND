@@ -7,8 +7,8 @@
     "build": "tsc -p tsconfig.json",
     "start:api": "node dist/server.js",
     "start:worker": "node dist/worker.js",
-    "migrate": "tsx src/db/migrate.ts",
-    "migrate:prod": "node dist/db/migrate.js",
+    "migrate": "tsx src/infrastructure/db/migrate.ts",
+    "migrate:prod": "node dist/infrastructure/db/migrate.js",
     "typecheck": "tsc --noEmit"
   },
   "type": "module",

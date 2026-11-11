@@ -1,15 +1,16 @@
-import { pool } from "./db/pool.js";
-import { iniciarWorkers } from "./workers.js";
+import { deps, useCases } from "./container.js";
+import { pool } from "./infrastructure/db/pool.js";
+import { startWorkers } from "./infrastructure/workers/startWorkers.js";
 
-// Proceso worker independiente (despliegue con worker separado / docker compose).
-const cerrarWorkers = await iniciarWorkers();
+// Standalone worker process (docker compose, or a paid plan with a separate worker).
+const stopWorkers = startWorkers(useCases, deps.videos);
 
-// Cierre ordenado: termina los jobs en curso antes de salir (Render/ECS envían SIGTERM).
-async function cerrar() {
-  console.log("Cerrando worker...");
-  await cerrarWorkers();
+// Graceful shutdown: running jobs finish before exiting (Render sends SIGTERM).
+async function shutdown() {
+  console.log("Stopping worker...");
+  await stopWorkers();
   await pool.end();
   process.exit(0);
 }
-process.on("SIGTERM", cerrar);
-process.on("SIGINT", cerrar);
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
